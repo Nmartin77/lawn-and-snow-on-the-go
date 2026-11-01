@@ -1,9 +1,9 @@
 export const CONFIG = {
-  SUPABASE_URL: "https://idmbvoddbbgrdyyxoqii.supabase.co/rest/v1",
+  SUPABASE_URL: "https://idmbvoddbbgrdyyxoqii.supabase.co",
   SUPABASE_ANON_KEY: "sb_publishable_-MsyvxKAL1wFgdmculSQvg_f0U-Dn5E",
-  BUSINESS_NAME: "Lawn and Snow on the Go LLC",
+  BUSINESS_NAME: "YOUR BUSINESS LEGAL NAME",
   CONTACT_EMAIL: "privacy@yourdomain.com",
   MAILING_ADDRESS: "Street, City, State ZIP",
-  GOVERNING_STATE: "Michigan",
+  GOVERNING_STATE: "YOUR STATE",
   GOOGLE_MAPS_KEY: "YOUR-MAPS-KEY",
 };
