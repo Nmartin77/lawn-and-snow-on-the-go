@@ -15,7 +15,7 @@ boot("customer", async (me) => {
   const card = (r) => {
     const qs = quotes.filter((q) => q.request_id === r.id);
     const body = r.status === "open"
-      ? qs.map((q) => `<div class="quote"><div><strong>${esc(q.co?.company_name)}</strong><p>${esc(q.message || "")}</p><p class="meta">Includes ${usd(q.price_cents * 0.15)} platform fee</p></div>
+      ? qs.map((q) => `<div class="quote"><div><strong>${esc(q.co?.company_name || "A crew")}</strong><p>${esc(q.message || "")}</p><p class="meta">Includes ${usd(q.price_cents * 0.15)} platform fee</p></div>
           <div><span class="price">${usd(q.price_cents)}${r.plan === "once" ? "" : "/visit"}</span> <button class="btn sm" data-act="accept" data-id="${q.id}">${r.plan === "once" ? "Book and pay" : "Subscribe"}</button></div></div>`).join("")
         + `<p><button class="btn sm ghost" data-act="del" data-id="${r.id}">Delete request</button></p>`
       : r.status === "booked" && r.plan !== "once" ? `<p><button class="btn sm ghost" data-act="cancel" data-id="${r.id}">Cancel subscription</button></p>` : "";
@@ -49,9 +49,14 @@ boot("customer", async (me) => {
   const load = async () => {
     const r = await Promise.all([
       sb.from("requests").select("*").order("created_at", { ascending: false }),
-      sb.from("quotes").select("*, co:profiles!company_id(company_name)"),
+      sb.from("quotes").select("*"),
       sb.from("crew_locations").select("*")]);
+    const bad = r.find((x) => x.error);
+    if (bad) note = "Could not load some data: " + bad.error.message;
     [reqs, quotes, crew] = r.map((x) => x.data || []);
+    const ids = [...new Set(quotes.map((q) => q.company_id))];
+    const names = ids.length ? (await sb.from("profiles").select("id,company_name").in("id", ids)).data || [] : [];
+    quotes = quotes.map((q) => ({ ...q, co: names.find((n) => n.id === q.company_id) }));
     render(); drawMap();
   };
 
