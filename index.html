@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Lawn and Snow on the Go</title><style>:root{--bg:#F1F4EE;--surface:#fff;--ink:#17261C;--muted:#5C6B60;--line:#D6DDD2;--green:#0B6B2E;--blue:#0A4A8F}
+@media(prefers-color-scheme:dark){:root{--bg:#101A13;--surface:#18251C;--ink:#E7EFE6;--muted:#9CAEA0;--line:#2B3C30;--green:#1B8040;--blue:#2F6FBF}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.cover{max-width:1000px;margin:0 auto;padding:20px 16px 40px;display:grid;grid-template-columns:minmax(0,440px) minmax(0,1fr);gap:32px;align-items:center}
+@media(max-width:780px){.cover{grid-template-columns:1fr}}
+.cover img{width:100%;height:auto;display:block;border-radius:16px}
+h1{font-size:28px;line-height:1.15;margin:0 0 8px}.lead{color:var(--muted);margin:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;margin-top:16px;border-left:6px solid var(--c)}
+.card h2{font-size:20px;margin:0 0 4px}.card p{margin:0 0 14px;color:var(--muted)}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+a.btn{flex:1;min-width:130px;text-align:center;text-decoration:none;font-weight:700;padding:12px 16px;border-radius:8px;color:#fff;background:var(--c)}
+a.btn.alt{background:transparent;color:var(--ink);border:2px solid var(--c)}
+a:focus-visible{outline:3px solid #E8590C;outline-offset:2px}
+footer{margin-top:24px;font-size:14px;color:var(--muted)}footer a{color:inherit}</style></head>
+<body><main class="cover"><img src="cover.jpg" width="900" height="1165" alt="Lawn and Snow on the Go: a lawn mower on green grass beside a snowplow truck pushing snow">
+<div><h1>Book lawn care and snow removal from local crews</h1>
+<p class="lead">Or find jobs for your own crew. Choose how you want to use Lawn and Snow on the Go.</p>
+<section class="card" style="--c:var(--green)"><h2>I need lawn or snow service</h2><p>Request quotes, compare prices and book online.</p><div class="row"><a class="btn" href="customer.html">Customer sign in</a><a class="btn alt" href="customer.html#signup">Create account</a></div></section>
+<section class="card" style="--c:var(--blue)"><h2>I run a crew</h2><p>Find nearby jobs, send quotes and get paid.</p><div class="row"><a class="btn" href="company.html">Crew sign in</a><a class="btn alt" href="company.html#signup">Create account</a></div></section>
+<footer><a href="terms.html">Terms of service</a> · <a href="privacy.html">Privacy policy</a></footer></div></main></body></html>
