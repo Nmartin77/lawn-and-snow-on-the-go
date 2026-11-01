@@ -1,7 +1,7 @@
 // Fill these in. The anon key and Maps key are meant to be public; never put a Stripe secret key here.
 export const CONFIG = {
-  SUPABASE_URL: "https://YOUR-PROJECT.supabase.co",
-  SUPABASE_ANON_KEY: "YOUR-ANON-KEY",
+  SUPABASE_URL: "https://https://idmbvoddbbgrdyyxoqii.supabase.co/rest/v1/.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlkbWJ2b2RkYmJncmR5eXhvcWlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM1NTIwNjcsImV4cCI6MjEwOTEyODA2N30.7vrFCw-eicqedZ95yXvdi44rM28yqZKfX4jc_oQUSg4",
   BUSINESS_NAME: "YOUR BUSINESS LEGAL NAME", // shown in the privacy policy
   CONTACT_EMAIL: "privacy@yourdomain.com",
   MAILING_ADDRESS: "Street, City, State ZIP",
