@@ -68,8 +68,17 @@ sb.auth.onAuthStateChange((ev) => {
   };
 });
 
+// Turns the browser's vague "Failed to fetch" into a message that names the address being used.
+const friendly = (e) => {
+  if (!/fetch|network/i.test(e.message)) return e.message;
+  let host = CONFIG.SUPABASE_URL;
+  try { host = new URL(CONFIG.SUPABASE_URL).host; } catch (x) {}
+  return `Could not reach "${host}". Check SUPABASE_URL in config.js: it must be your real Project URL.`;
+};
+
 function authScreen(role, done, notice = "") {
   let mode = location.hash === "#signup" ? "up" : "in";
+  if (/YOUR-/.test(CONFIG.SUPABASE_URL + CONFIG.SUPABASE_ANON_KEY)) notice = "Setup needed: config.js still has YOUR-... placeholders for Supabase. Replace them with your real values.";
   const g = modal("");
   const box = $(".gate-box", g);
   const T = { in: "Sign in", up: "Create your account", pw: "Reset your password", link: "Email me a sign-in link" };
@@ -101,7 +110,7 @@ function authScreen(role, done, notice = "") {
         const r = mode === "pw"
           ? await sb.auth.resetPasswordForEmail(e, { redirectTo: here() })
           : await sb.auth.signInWithOtp({ email: e, options: { emailRedirectTo: here(), shouldCreateUser: false } });
-        return msg(r.error ? r.error.message : "If that email has an account, a link is on its way.");
+        return msg(r.error ? friendly(r.error) : "If that email has an account, a link is on its way.");
       }
       let r;
       if (up) {
@@ -110,7 +119,7 @@ function authScreen(role, done, notice = "") {
         r = await sb.auth.signUp({ email: e, password: p, options: { emailRedirectTo: here(), data: { role, name: v("n"), company_name: v("c") || null } } });
         if (!r.error && !r.data.session) return msg("Check your email to confirm your account, then sign in.");
       } else r = await sb.auth.signInWithPassword({ email: e, password: p });
-      if (r.error) return msg(r.error.message);
+      if (r.error) return msg(friendly(r.error));
       close(g); done();
     };
   };
