@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lawn and Snow on the Go for Crews</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="wrap">
+<header><a class="brand" href="index.html" style="text-decoration:none">Lawn and Snow <i>on the Go</i></a><div id="who"></div></header>
+<div id="map" class="map"></div><main id="app"></main><footer class="meta" style="margin-top:32px"><a href="terms.html">Terms of service</a> · <a href="privacy.html">Privacy policy</a></footer></div>
+<script type="module">
+import { sb, $, esc, usd, PLANS, est, api, boot, makeMap } from "./common.js";
+boot("company", async (me) => {
+  let reqs = [], mine = [], cust = {}, note = "", watch = null, last = 0, mp = null, pins = [];
+  const app = $("#app");
+  if (!me.charges_enabled && me.stripe_account_id) { try { me.charges_enabled = (await api("refresh")).charges_enabled; } catch (e) {} }
+
+  const job = (r) => {
+    const q = mine.find((x) => x.request_id === r.id), per = r.plan === "once" ? "job" : "visit";
+    return `<article class="job"><h3>${esc(r.service)}</h3><div class="meta">${esc(r.address)} · ${r.size_sqft.toLocaleString()} sq ft · ${PLANS[r.plan]} · by ${esc(r.preferred_date || "")}</div>
+      ${r.notes ? `<p class="meta">${esc(r.notes)}</p>` : ""}
+      ${q ? `<div class="quote"><span>You quoted · you keep ${usd(q.price_cents * 0.85)}</span><span class="price">${usd(q.price_cents)}${r.plan === "once" ? "" : "/visit"}</span></div>`
+        : `<form class="row" data-rid="${r.id}"><input name="price" type="number" min="1" step="0.01" value="${est(r.service, r.size_sqft)}" aria-label="Price in dollars"><input name="msg" placeholder="Short message" aria-label="Message"><button class="btn sm">Send quote</button></form>
+           <p class="meta">Price per ${per}. You keep 85% after the 15% platform fee.</p>`}</article>`;
+  };
+  const won = (r) => {
+    const c = cust[r.customer_id] || {};
+    return `<div class="quote"><div><strong>${esc(r.service)}</strong><p>${esc(c.name || "Customer")} · ${esc(c.phone || "")}</p><p>${esc(r.address)} · ${PLANS[r.plan]}</p></div>
+      ${r.status === "done" ? `<span class="tag">Complete</span>` : r.plan === "once" ? `<button class="btn sm ghost" data-act="done" data-id="${r.id}">Mark complete</button>` : `<span class="tag">Active subscription</span>`}</div>`;
+  };
+  const render = () => {
+    const open = reqs.filter((r) => r.status === "open");
+    const wonJobs = reqs.filter((r) => ["booked", "done"].includes(r.status) && mine.some((q) => q.id === r.booked_quote));
+    app.innerHTML = (note ? `<p class="panel" role="status">${esc(note)}</p>` : "")
+      + (me.charges_enabled ? "" : `<div class="panel"><h2>Set up payouts</h2><p class="meta">Connect a bank account with Stripe to receive 85% of each job. You can send quotes now, but customers can only book you once payouts are active.</p><button class="btn" data-act="onboard">Set up payouts</button></div>`)
+      + `<div class="grid"><section><h2>Open jobs</h2>${open.length ? open.map(job).join("") : `<p class="empty">No open jobs right now.</p>`}</section>
+        <section class="panel"><h2>${esc(me.company_name)}</h2>
+        <label class="chk"><input type="checkbox" id="loc" ${watch !== null ? "checked" : ""}> Share my live location with booked customers</label>
+        <h3 style="margin-top:16px">Booked jobs</h3>${wonJobs.length ? wonJobs.map(won).join("") : `<p class="meta">Win a quote and it shows up here.</p>`}</section></div>`;
+  };
+  const drawMap = (me_pos) => {
+    if (!mp) return;
+    pins.forEach((x) => x.setMap(null)); pins = [];
+    reqs.filter((r) => r.lat && r.status === "open").forEach((r) => pins.push(new mp.m.Marker({ map: mp.map, position: { lat: r.lat, lng: r.lng }, title: r.service })));
+  };
+  const load = async () => {
+    const [r, q] = await Promise.all([sb.from("requests").select("*").order("created_at", { ascending: false }), sb.from("quotes").select("*").eq("company_id", me.id)]);
+    reqs = r.data || []; mine = q.data || [];
+    const ids = [...new Set(reqs.map((x) => x.customer_id))];
+    cust = Object.fromEntries(((await sb.from("profiles").select("id,name,phone").in("id", ids)).data || []).map((p) => [p.id, p]));
+    render(); drawMap();
+  };
+
+  app.onclick = async (e) => {
+    const b = e.target.closest("[data-act]"); if (!b) return;
+    try {
+      if (b.dataset.act === "onboard") location.href = (await api("onboard")).url;
+      if (b.dataset.act === "done") { await sb.rpc("complete_request", { rid: +b.dataset.id }); await load(); }
+    } catch (x) { note = x.message; render(); }
+  };
+  app.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const { error } = await sb.from("quotes").insert({ request_id: +e.target.dataset.rid, company_id: me.id, price_cents: Math.round(+f.get("price") * 100), message: f.get("msg") });
+    note = error ? error.message : "Quote sent."; await load();
+  };
+  app.onchange = (e) => {
+    if (e.target.id !== "loc") return;
+    if (e.target.checked) {
+      watch = navigator.geolocation.watchPosition((p) => {
+        if (Date.now() - last < 10000) return; last = Date.now();
+        sb.from("crew_locations").upsert({ company_id: me.id, lat: p.coords.latitude, lng: p.coords.longitude, updated_at: new Date().toISOString() });
+      }, () => { note = "Location permission was denied."; navigator.geolocation.clearWatch(watch); watch = null; render(); }, { enableHighAccuracy: true });
+    } else { navigator.geolocation.clearWatch(watch); watch = null; sb.from("crew_locations").delete().eq("company_id", me.id).then(() => {}); }
+  };
+
+  makeMap($("#map")).then((m) => { mp = m; drawMap(); });
+  sb.channel("co").on("postgres_changes", { event: "*", schema: "public", table: "requests" }, load)
+    .on("postgres_changes", { event: "*", schema: "public", table: "quotes" }, load).subscribe();
+  load();
+});
+</script></body></html>
