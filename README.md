@@ -13,7 +13,7 @@ Two static web apps (`web/customer.html`, `web/company.html`) on one backend:
 ## Setup (about an hour)
 
 1. **Supabase.** Create a project. In the SQL editor, run `supabase/schema.sql`. Under Authentication, turn on email confirmation and set the Site URL and redirect URLs to your domain.
-2. **Stripe.** Turn on Connect (Express accounts). In Settings > Billing > Customer portal, save the portal settings. Add a webhook endpoint `https://YOUR-PROJECT.supabase.co/functions/v1/api/webhook` for the events `checkout.session.completed` and `customer.subscription.deleted`.
+2. **Stripe.** Turn on Connect (Express accounts). In Settings > Billing > Customer portal, save the portal settings. Add a webhook endpoint `https://YOUR-PROJECT.supabase.co/functions/v1/api/webhook` for the events `checkout.session.completed`, `invoice.paid` and `customer.subscription.deleted`.
 3. **Deploy the function.**
    ```
    supabase link --project-ref YOUR-PROJECT
@@ -23,6 +23,31 @@ Two static web apps (`web/customer.html`, `web/company.html`) on one backend:
 4. **Google Maps.** In Google Cloud, enable Maps JavaScript API and Geocoding API. Restrict the key to your domain.
 5. **Configure and host.** Put your Supabase URL, anon key and Maps key in `web/config.js`. Upload the `web` folder to any static host (Netlify, Vercel, Cloudflare Pages, GitHub Pages). No build step.
 6. **Test** with Stripe test mode: a crew signs up, completes payout setup, a customer requests, the crew quotes, the customer books with card 4242 4242 4242 4242.
+
+## Location matching (10 miles)
+- A customer's request is saved with map coordinates from the address (or the device's current location). The app refuses a request it cannot place on the map.
+- Each crew sets a **service area**: a base address and a radius of 1 to 10 miles. Crews only see, and can only quote, open requests inside their area. The database enforces this, not just the page.
+- Customers see a "Crews near you" list with names and approximate distances. A crew's exact base location is never shown, and it lives in a table only that crew can read.
+- Address lookup uses Google if you add a Maps key, and falls back to OpenStreetMap's free service if not. Re-run `repair.sql` after updating.
+
+## Arrival time and the 2-hour window
+After a job is booked, the crew sets an **estimated arrival time** on the active job, or taps **I have arrived**. The customer sees the ETA and the end of a **2-hour window** to finish (from the ETA, or from the moment the crew arrived). If the window passes, both sides see that it was missed. It is information only and does not block the crew from finishing. There are no text or email alerts yet. Redeploy the function and re-run `repair.sql` after updating. Change the window with `WINDOW_HOURS` in the function.
+
+## Photos
+Customers can add up to 6 photos to a request, and crews can add up to 6 to each quote. They are stored in the private `quote-photos` bucket (created by `repair.sql`), shrunk in the browser first, and shown only to the people involved. Finished-job photos use a separate `job-photos` bucket.
+
+## How a job and payment work
+1. A customer accepts a quote and pays. The job becomes an **active job** for both sides, and other quotes disappear.
+2. The money is collected by your Stripe account and **held**. The crew is not paid yet.
+3. When the work is done, the crew opens the active job, uploads at least one photo, and clicks **Finish job and get paid**. This starts a **48-hour approval window**.
+4. The customer can **approve** (the crew is paid right away) or **report a problem** from the job or the menu. If the customer does nothing for 48 hours, the payment is released automatically. Subscriptions work the same way for every visit.
+5. The customer sees the photos on their active or past job.
+
+Notes: re-run `supabase/repair.sql` and redeploy the function after updating. Holding customer funds before paying a crew may carry legal and licensing requirements where you operate, so ask a lawyer or accountant. A **menu button (three lines)** in both apps opens "Refunds and disputes". A problem report holds the payment. You resolve it at `admin.html` by signing in with an account whose email is in the `ADMIN_EMAILS` secret: **Refund customer** returns the money through Stripe, **Pay the crew** releases it.
+
+Extra setup for this:
+- Set two more secrets: `supabase secrets set ADMIN_EMAILS=you@example.com CRON_SECRET=a-long-random-string`.
+- Automatic release after 48 hours also runs when a crew opens the app. For reliable timing, add the repo secrets `SUPABASE_URL` and `CRON_SECRET` on GitHub. The included workflow `sweep.yml` then runs every 30 minutes.
 
 ## Hosting on GitHub
 GitHub hosts the two web apps (GitHub Pages). It cannot run server code, so the Supabase function and database stay on Supabase.
