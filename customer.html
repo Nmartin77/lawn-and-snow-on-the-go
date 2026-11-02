@@ -6,9 +6,9 @@
 <nav><button class="btn sm ghost" data-v="home">Requests</button><button class="btn sm ghost" data-v="account">Account</button></nav><div id="who"></div></header>
 <div id="map" class="map"></div><main id="app"></main><footer class="meta" style="margin-top:32px"><a href="terms.html">Terms of service</a> · <a href="privacy.html">Privacy policy</a></footer></div>
 <script type="module">
-import { sb, $, esc, usd, PLANS, SERVICES, api, boot, geocode, makeMap, uploadPhotos, photoUrls, thumbs } from "./common.js";
+import { sb, $, esc, usd, PLANS, SERVICES, api, boot, geocode, makeMap, uploadPhotos, photoUrls, thumbs, myLocation } from "./common.js";
 boot("customer", async (me) => {
-  let view = "home", reqs = [], quotes = [], crew = [], pays = [], comps = [], urls = {}, pu = {}, pins = [], mp = null;
+  let view = "home", reqs = [], quotes = [], crew = [], pays = [], comps = [], urls = {}, pu = {}, pins = [], mp = null, near = [], nearAddr = "", here = null;
   let note = location.search.includes("paid") ? "Payment received. Your booking appears here in a moment." : "";
   const app = $("#app");
 
@@ -20,8 +20,12 @@ boot("customer", async (me) => {
         + `<p><button class="btn sm ghost" data-act="del" data-id="${r.id}">Delete request</button></p>`
       : r.status === "booked" && r.plan !== "once" ? `<p><button class="btn sm ghost" data-act="cancel" data-id="${r.id}">Cancel subscription</button></p>` : "";
     return `<article class="job"><div class="job-h"><div><h3>${esc(r.service)}</h3><div class="meta">${esc(r.address)} · ${r.size_sqft.toLocaleString()} sq ft · ${PLANS[r.plan]}</div></div>
-      <span class="tag">${r.status === "open" ? qs.length + " quote" + (qs.length === 1 ? "" : "s") : r.status}</span></div>${thumbs(r.photos, pu)}${body}</article>`;
+      <span class="tag">${r.status === "open" ? qs.length + " quote" + (qs.length === 1 ? "" : "s") : r.status}</span></div>${thumbs(r.photos, pu)}${r.status === "open" ? `<label style="font-size:14px">Add photos to this request (up to 6 in total)<input type="file" class="addph" data-id="${r.id}" accept="image/*" multiple></label>` : ""}${body}</article>`;
   };
+  const nearPanel = () => nearAddr ? `<div class="panel"><h2>Crews near you</h2><p class="meta">${near.length
+    ? near.length + " crew" + (near.length === 1 ? "" : "s") + " within 10 miles of " + esc(nearAddr) + " can see your request and send quotes."
+    : "No crews have joined within 10 miles of " + esc(nearAddr) + " yet. Your request stays open, and crews that join nearby will see it."}</p>
+    ${near.map((c) => `<div class="quote"><strong>${esc(c.company_name)}</strong><span class="meta">${c.miles} mi away</span></div>`).join("")}</div>` : "";
   const state = (p, c) => p.status === "released" ? "Finished " + new Date(c?.created_at || p.released_at).toLocaleDateString() + ". Payment released to the crew."
     : p.status === "review" ? "The crew finished. Approve by " + new Date(p.review_ends_at).toLocaleString() + ", or the payment is released automatically."
     : p.status === "disputed" ? "Under review. The payment is on hold." : p.status === "refunded" ? "Refunded." : "Waiting for the crew to finish the job.";
@@ -44,11 +48,13 @@ boot("customer", async (me) => {
     <label>How often?<select id="pl">${Object.entries(PLANS).map(([k, v]) => `<option value="${k}">${v}${k === "once" ? "" : " subscription"}</option>`).join("")}</select></label>
     <label>Area size (sq ft)<input id="z" type="number" min="500" step="100" value="5000" required></label>
     <label>Address<input id="a" required value="${esc([me.street, me.city, me.state].filter(Boolean).join(", "))}"></label>
+    <button type="button" class="btn sm ghost" data-act="loc" style="margin-top:8px">Use my current location</button> <span class="meta" id="locmsg"></span>
+    <p class="meta">Crews within 10 miles of this location can see your request.</p>
     <label>Preferred date<input id="d" type="date" required></label>
     <label>Notes<textarea id="n" rows="2"></textarea></label>
     <label>Photos of the area (optional, up to 6)<input id="ph" type="file" accept="image/*" multiple></label>
     <p class="meta">Prices include a 15% platform fee.</p><button class="btn">Send to local pros</button></form>
-    <section>${reqs.some((r) => r.status === "booked") ? `<h2>Active jobs</h2>${reqs.filter((r) => r.status === "booked").map(activeCard).join("")}` : ""}<h2>Your requests</h2>${reqs.some((r) => r.status === "open") ? reqs.filter((r) => r.status === "open").map(card).join("") : `<p class="empty">No open requests. Fill in the form and local crews will send prices.</p>`}${reqs.some((r) => ["done", "cancelled"].includes(r.status)) ? `<h2>Past jobs</h2>${reqs.filter((r) => ["done", "cancelled"].includes(r.status)).map(pastCard).join("")}` : ""}</section></div>`;
+    <section>${nearPanel()}${reqs.some((r) => r.status === "booked") ? `<h2>Active jobs</h2>${reqs.filter((r) => r.status === "booked").map(activeCard).join("")}` : ""}<h2>Your requests</h2>${reqs.some((r) => r.status === "open") ? reqs.filter((r) => r.status === "open").map(card).join("") : `<p class="empty">No open requests. Fill in the form and local crews will send prices.</p>`}${reqs.some((r) => ["done", "cancelled"].includes(r.status)) ? `<h2>Past jobs</h2>${reqs.filter((r) => ["done", "cancelled"].includes(r.status)).map(pastCard).join("")}` : ""}</section></div>`;
   const account = () => `<div class="grid"><form class="panel" id="pf"><h2>Contact and address</h2>
     ${[["name", "Name"], ["phone", "Phone"], ["street", "Service address"], ["city", "City"], ["state", "State"], ["zip", "ZIP"]].map(([k, l]) => `<label>${l}<input name="${k}" value="${esc(me[k] || "")}"></label>`).join("")}
     <label>Email (your sign-in)<input value="${esc(me.email)}" readonly></label><button class="btn">Save details</button>
@@ -77,6 +83,9 @@ boot("customer", async (me) => {
     const ids = [...new Set(quotes.map((q) => q.company_id))];
     const names = ids.length ? (await sb.from("profiles").select("id,company_name").in("id", ids)).data || [] : [];
     quotes = quotes.map((q) => ({ ...q, co: names.find((n) => n.id === q.company_id) }));
+    const base = reqs.find((x) => x.status === "open" && x.lat);
+    near = []; nearAddr = "";
+    if (base) { nearAddr = base.address; near = (await sb.rpc("nearby_crews", { rlat: base.lat, rlng: base.lng })).data || []; }
     pu = await photoUrls([...reqs.flatMap((x) => x.photos || []), ...quotes.flatMap((x) => x.photos || [])]);
     urls = {};
     const paths = comps.flatMap((c) => c.photos);
@@ -88,6 +97,7 @@ boot("customer", async (me) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     const id = +b.dataset.id;
     try {
+      if (b.dataset.act === "loc") { here = await myLocation(); $("#locmsg").textContent = "Using your current location."; return; }
       if (b.dataset.act === "accept") location.href = (await api("checkout", { quote_id: id })).url;
       if (b.dataset.act === "portal") location.href = (await api("portal")).url;
       if (b.dataset.act === "cancel" && confirm("Cancel this subscription?")) { await api("cancel", { request_id: id }); note = "Subscription cancelled."; await load(); }
@@ -95,14 +105,28 @@ boot("customer", async (me) => {
       if (b.dataset.act === "del") { await sb.from("requests").delete().eq("id", id); await load(); }
     } catch (x) { note = x.message; render(); }
   };
+  app.onchange = async (e) => {
+    if (!e.target.classList.contains("addph")) return;
+    const r = reqs.find((x) => x.id === +e.target.dataset.id);
+    try {
+      const room = 6 - (r.photos || []).length;
+      if (room <= 0) throw new Error("A request can have up to 6 photos.");
+      const added = await uploadPhotos([...e.target.files].slice(0, room), me.id);
+      const { error } = await sb.from("requests").update({ photos: [...(r.photos || []), ...added] }).eq("id", r.id);
+      if (error) throw error;
+      note = "Photos added.";
+    } catch (x) { note = x.message; }
+    await load();
+  };
   app.onsubmit = async (e) => {
     e.preventDefault();
     try {
       if (e.target.id === "f") {
-        const g = (i) => $("#" + i).value.trim(), ll = await geocode(g("a"));
+        const g = (i) => $("#" + i).value.trim(), ll = here || await geocode(g("a"));
+        if (!ll.lat) throw new Error("We couldn\u2019t find that address. Add the city and state, or tap Use my current location.");
         const photos = await uploadPhotos($("#ph").files, me.id);
         const { error } = await sb.from("requests").insert({ customer_id: me.id, service: g("s"), plan: g("pl"), size_sqft: +g("z"), address: g("a"), ...ll, preferred_date: g("d"), notes: g("n"), photos });
-        if (error) throw error; note = "Request sent. Crews will quote soon.";
+        if (error) throw error; here = null; note = "Request sent. Crews within 10 miles can now see it and send quotes.";
       } else {
         const d = Object.fromEntries(new FormData(e.target));
         const { error } = await sb.from("profiles").update(d).eq("id", me.id);
