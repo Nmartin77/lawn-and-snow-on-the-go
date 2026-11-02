@@ -5,9 +5,9 @@
 <header><a class="brand" href="index.html" style="text-decoration:none">Lawn and Snow <i>on the Go</i></a><div id="who"></div></header>
 <div id="map" class="map"></div><main id="app"></main><footer class="meta" style="margin-top:32px"><a href="terms.html">Terms of service</a> · <a href="privacy.html">Privacy policy</a></footer></div>
 <script type="module">
-import { sb, $, esc, usd, PLANS, est, api, boot, makeMap } from "./common.js";
+import { sb, $, esc, usd, PLANS, est, api, boot, makeMap, uploadPhotos, photoUrls, thumbs } from "./common.js";
 boot("company", async (me) => {
-  let reqs = [], mine = [], pays = [], cust = {}, note = "", watch = null, last = 0, mp = null, pins = [];
+  let reqs = [], mine = [], pays = [], pu = {}, cust = {}, note = "", watch = null, last = 0, mp = null, pins = [];
   const app = $("#app");
   // Shrink phone photos before upload (max 1600 px, JPEG).
   const shrink = (file) => new Promise((res, rej) => {
@@ -26,9 +26,9 @@ boot("company", async (me) => {
   const job = (r) => {
     const q = mine.find((x) => x.request_id === r.id), per = r.plan === "once" ? "job" : "visit";
     return `<article class="job"><h3>${esc(r.service)}</h3><div class="meta">${esc(r.address)} · ${r.size_sqft.toLocaleString()} sq ft · ${PLANS[r.plan]} · by ${esc(r.preferred_date || "")}</div>
-      ${r.notes ? `<p class="meta">${esc(r.notes)}</p>` : ""}
-      ${q ? `<div class="quote"><span>You quoted · you keep ${usd(q.price_cents * 0.85)}</span><span class="price">${usd(q.price_cents)}${r.plan === "once" ? "" : "/visit"}</span></div>`
-        : `<form class="row" data-rid="${r.id}"><input name="price" type="number" min="1" step="0.01" value="${est(r.service, r.size_sqft)}" aria-label="Price in dollars"><input name="msg" placeholder="Short message" aria-label="Message"><button class="btn sm">Send quote</button></form>
+      ${r.notes ? `<p class="meta">${esc(r.notes)}</p>` : ""}${thumbs(r.photos, pu)}
+      ${q ? `<div class="quote"><span>You quoted · you keep ${usd(q.price_cents * 0.85)}</span><span class="price">${usd(q.price_cents)}${r.plan === "once" ? "" : "/visit"}</span></div>${thumbs(q.photos, pu)}`
+        : `<form class="row" data-rid="${r.id}"><input name="price" type="number" min="1" step="0.01" value="${est(r.service, r.size_sqft)}" aria-label="Price in dollars"><input name="msg" placeholder="Short message" aria-label="Message"><label style="flex-basis:100%;margin:0">Photos for your quote, such as similar past work (optional, up to 6)<input type="file" name="qphotos" accept="image/*" multiple></label><button class="btn sm">Send quote</button></form>
            <p class="meta">Price per ${per}. You keep 85% after the 15% platform fee.</p>`}</article>`;
   };
   const when = (d) => new Date(d).toLocaleDateString();
@@ -64,6 +64,7 @@ boot("company", async (me) => {
   const load = async () => {
     const [r, q, pm] = await Promise.all([sb.from("requests").select("*").order("created_at", { ascending: false }), sb.from("quotes").select("*").eq("company_id", me.id), sb.from("payments").select("*").order("created_at", { ascending: false })]);
     reqs = r.data || []; mine = q.data || []; pays = pm.data || [];
+    pu = await photoUrls([...reqs.flatMap((x) => x.photos || []), ...mine.flatMap((x) => x.photos || [])]);
     const ids = [...new Set(reqs.map((x) => x.customer_id))];
     cust = Object.fromEntries(((await sb.from("profiles").select("id,name,phone").in("id", ids)).data || []).map((p) => [p.id, p]));
     render(); drawMap();
@@ -95,7 +96,9 @@ boot("company", async (me) => {
       } catch (x) { note = x.message; }
       return load();
     }
-    const { error } = await sb.from("quotes").insert({ request_id: +e.target.dataset.rid, company_id: me.id, price_cents: Math.round(+f.get("price") * 100), message: f.get("msg") });
+    let photos = [];
+    try { photos = await uploadPhotos(f.getAll("qphotos"), me.id); } catch (x) { note = x.message; return load(); }
+    const { error } = await sb.from("quotes").insert({ request_id: +e.target.dataset.rid, company_id: me.id, price_cents: Math.round(+f.get("price") * 100), message: f.get("msg"), photos });
     note = error ? error.message : "Quote sent."; await load();
   };
   app.onchange = (e) => {
