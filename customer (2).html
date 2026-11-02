@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lawn and Snow on the Go</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="wrap">
+<header><a class="brand" href="index.html" style="text-decoration:none">Lawn and Snow <i>on the Go</i></a>
+<nav><button class="btn sm ghost" data-v="home">Requests</button><button class="btn sm ghost" data-v="account">Account</button></nav><div id="who"></div></header>
+<div id="map" class="map"></div><main id="app"></main><footer class="meta" style="margin-top:32px"><a href="terms.html">Terms of service</a> · <a href="privacy.html">Privacy policy</a></footer></div>
+<script type="module">
+import { sb, $, esc, usd, PLANS, SERVICES, api, boot, geocode, makeMap, uploadPhotos, photoUrls, thumbs } from "./common.js";
+boot("customer", async (me) => {
+  let view = "home", reqs = [], quotes = [], crew = [], pays = [], comps = [], urls = {}, pu = {}, pins = [], mp = null;
+  let note = location.search.includes("paid") ? "Payment received. Your booking appears here in a moment." : "";
+  const app = $("#app");
+
+  const card = (r) => {
+    const qs = quotes.filter((q) => q.request_id === r.id);
+    const body = r.status === "open"
+      ? qs.map((q) => `<div class="quote"><div><strong>${esc(q.co?.company_name || "A crew")}</strong><p>${esc(q.message || "")}</p><p class="meta">Includes ${usd(q.price_cents * 0.15)} platform fee</p>${thumbs(q.photos, pu)}</div>
+          <div><span class="price">${usd(q.price_cents)}${r.plan === "once" ? "" : "/visit"}</span> <button class="btn sm" data-act="accept" data-id="${q.id}">${r.plan === "once" ? "Book and pay" : "Subscribe"}</button></div></div>`).join("")
+        + `<p><button class="btn sm ghost" data-act="del" data-id="${r.id}">Delete request</button></p>`
+      : r.status === "booked" && r.plan !== "once" ? `<p><button class="btn sm ghost" data-act="cancel" data-id="${r.id}">Cancel subscription</button></p>` : "";
+    return `<article class="job"><div class="job-h"><div><h3>${esc(r.service)}</h3><div class="meta">${esc(r.address)} · ${r.size_sqft.toLocaleString()} sq ft · ${PLANS[r.plan]}</div></div>
+      <span class="tag">${r.status === "open" ? qs.length + " quote" + (qs.length === 1 ? "" : "s") : r.status}</span></div>${thumbs(r.photos, pu)}${body}</article>`;
+  };
+  const state = (p, c) => p.status === "released" ? "Finished " + new Date(c?.created_at || p.released_at).toLocaleDateString() + ". Payment released to the crew."
+    : p.status === "review" ? "The crew finished. Approve by " + new Date(p.review_ends_at).toLocaleString() + ", or the payment is released automatically."
+    : p.status === "disputed" ? "Under review. The payment is on hold." : p.status === "refunded" ? "Refunded." : "Waiting for the crew to finish the job.";
+  const visit = (p) => {
+    const c = comps.find((x) => x.payment_id === p.id);
+    return `<div class="quote"><div><strong>${usd(p.amount_cents)}</strong> <span class="meta">paid ${new Date(p.created_at).toLocaleDateString()}</span>
+      <p class="meta">${state(p, c)}</p>${p.status === "review" ? `<button class="btn sm" data-act="approve" data-id="${p.id}">Approve and release payment</button>` : ""}${c?.notes ? `<p>${esc(c.notes)}</p>` : ""}</div>
+      ${c ? `<div class="row">${c.photos.map((x) => urls[x] ? `<a href="${urls[x]}" target="_blank" rel="noopener"><img src="${urls[x]}" alt="Photo of the finished work" width="72" height="72" style="object-fit:cover;border-radius:8px"></a>` : "").join("")}</div>` : ""}</div>`;
+  };
+  const activeCard = (r) => {
+    const q = quotes.find((x) => x.id === r.booked_quote), ps = pays.filter((p) => p.request_id === r.id);
+    return `<article class="job"><div class="job-h"><div><h3>${esc(r.service)}</h3><div class="meta">${esc(q?.co?.company_name || "Your crew")} · ${esc(r.address)} · ${PLANS[r.plan]}</div></div><span class="tag booked">Active</span></div>
+      <p class="meta">${q ? usd(q.price_cents) : ""}${r.plan === "once" ? "" : " per visit"}. Your payment is held until the crew finishes the job and uploads photos.</p>
+      ${ps.length ? ps.map(visit).join("") : `<p class="meta">Your payment is still processing.</p>`}
+      ${r.plan !== "once" ? `<p><button class="btn sm ghost" data-act="cancel" data-id="${r.id}">Cancel subscription</button></p>` : ""}</article>`;
+  };
+  const pastCard = (r) => `<article class="job"><div class="job-h"><div><h3>${esc(r.service)}</h3><div class="meta">${esc(r.address)} · ${PLANS[r.plan]}</div></div><span class="tag">${r.status === "done" ? "Complete" : "Cancelled"}</span></div>${pays.filter((p) => p.request_id === r.id).map(visit).join("")}</article>`;
+  const home = () => `<div class="grid"><form class="panel" id="f"><h2>Request a quote</h2>
+    <label>Service<select id="s">${Object.keys(SERVICES).map((s) => `<option>${s}</option>`).join("")}</select></label>
+    <label>How often?<select id="pl">${Object.entries(PLANS).map(([k, v]) => `<option value="${k}">${v}${k === "once" ? "" : " subscription"}</option>`).join("")}</select></label>
+    <label>Area size (sq ft)<input id="z" type="number" min="500" step="100" value="5000" required></label>
+    <label>Address<input id="a" required value="${esc([me.street, me.city, me.state].filter(Boolean).join(", "))}"></label>
+    <label>Preferred date<input id="d" type="date" required></label>
+    <label>Notes<textarea id="n" rows="2"></textarea></label>
+    <label>Photos of the area (optional, up to 6)<input id="ph" type="file" accept="image/*" multiple></label>
+    <p class="meta">Prices include a 15% platform fee.</p><button class="btn">Send to local pros</button></form>
+    <section>${reqs.some((r) => r.status === "booked") ? `<h2>Active jobs</h2>${reqs.filter((r) => r.status === "booked").map(activeCard).join("")}` : ""}<h2>Your requests</h2>${reqs.some((r) => r.status === "open") ? reqs.filter((r) => r.status === "open").map(card).join("") : `<p class="empty">No open requests. Fill in the form and local crews will send prices.</p>`}${reqs.some((r) => ["done", "cancelled"].includes(r.status)) ? `<h2>Past jobs</h2>${reqs.filter((r) => ["done", "cancelled"].includes(r.status)).map(pastCard).join("")}` : ""}</section></div>`;
+  const account = () => `<div class="grid"><form class="panel" id="pf"><h2>Contact and address</h2>
+    ${[["name", "Name"], ["phone", "Phone"], ["street", "Service address"], ["city", "City"], ["state", "State"], ["zip", "ZIP"]].map(([k, l]) => `<label>${l}<input name="${k}" value="${esc(me[k] || "")}"></label>`).join("")}
+    <label>Email (your sign-in)<input value="${esc(me.email)}" readonly></label><button class="btn">Save details</button>
+    <p class="meta">Agreement signed ${new Date(me.waiver_signed_at).toLocaleDateString()}. Crews see your address and phone only after you book them.</p></form>
+    <section class="panel"><h2>Payment method and subscriptions</h2><p class="meta">Cards are entered and stored by Stripe, never on this site.</p>
+    <button class="btn" data-act="portal">Manage cards and subscriptions</button></section></div>`;
+  const render = () => { app.innerHTML = (note ? `<p class="panel" role="status">${esc(note)}</p>` : "") + (view === "home" ? home() : account()); };
+
+  const drawMap = () => {
+    if (!mp) return;
+    pins.forEach((x) => x.setMap(null)); pins = [];
+    const { m, map } = mp;
+    reqs.filter((r) => r.lat && ["open", "booked"].includes(r.status)).forEach((r) => pins.push(new m.Marker({ map, position: { lat: r.lat, lng: r.lng }, title: r.service })));
+    crew.forEach((c) => pins.push(new m.Marker({ map, position: { lat: c.lat, lng: c.lng }, title: "Your crew", icon: { path: m.SymbolPath.CIRCLE, scale: 9, fillColor: "#1F5233", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 3 } })));
+  };
+  const load = async () => {
+    const r = await Promise.all([
+      sb.from("requests").select("*").order("created_at", { ascending: false }),
+      sb.from("quotes").select("*"),
+      sb.from("crew_locations").select("*"),
+      sb.from("payments").select("*").order("created_at", { ascending: false }),
+      sb.from("completions").select("*")]);
+    const bad = r.find((x) => x.error);
+    if (bad) note = "Could not load some data: " + bad.error.message;
+    [reqs, quotes, crew, pays, comps] = r.map((x) => x.data || []);
+    const ids = [...new Set(quotes.map((q) => q.company_id))];
+    const names = ids.length ? (await sb.from("profiles").select("id,company_name").in("id", ids)).data || [] : [];
+    quotes = quotes.map((q) => ({ ...q, co: names.find((n) => n.id === q.company_id) }));
+    pu = await photoUrls([...reqs.flatMap((x) => x.photos || []), ...quotes.flatMap((x) => x.photos || [])]);
+    urls = {};
+    const paths = comps.flatMap((c) => c.photos);
+    if (paths.length) ((await sb.storage.from("job-photos").createSignedUrls(paths, 3600)).data || []).forEach((x) => { if (x.signedUrl) urls[x.path] = x.signedUrl; });
+    render(); drawMap();
+  };
+
+  app.onclick = async (e) => {
+    const b = e.target.closest("[data-act]"); if (!b) return;
+    const id = +b.dataset.id;
+    try {
+      if (b.dataset.act === "accept") location.href = (await api("checkout", { quote_id: id })).url;
+      if (b.dataset.act === "portal") location.href = (await api("portal")).url;
+      if (b.dataset.act === "cancel" && confirm("Cancel this subscription?")) { await api("cancel", { request_id: id }); note = "Subscription cancelled."; await load(); }
+      if (b.dataset.act === "approve") { await api("approve", { payment_id: id }); note = "Payment released to the crew."; await load(); }
+      if (b.dataset.act === "del") { await sb.from("requests").delete().eq("id", id); await load(); }
+    } catch (x) { note = x.message; render(); }
+  };
+  app.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      if (e.target.id === "f") {
+        const g = (i) => $("#" + i).value.trim(), ll = await geocode(g("a"));
+        const photos = await uploadPhotos($("#ph").files, me.id);
+        const { error } = await sb.from("requests").insert({ customer_id: me.id, service: g("s"), plan: g("pl"), size_sqft: +g("z"), address: g("a"), ...ll, preferred_date: g("d"), notes: g("n"), photos });
+        if (error) throw error; note = "Request sent. Crews will quote soon.";
+      } else {
+        const d = Object.fromEntries(new FormData(e.target));
+        const { error } = await sb.from("profiles").update(d).eq("id", me.id);
+        if (error) throw error; Object.assign(me, d); note = "Saved your details.";
+      }
+      await load();
+    } catch (x) { note = x.message; render(); }
+  };
+  document.querySelectorAll("nav [data-v]").forEach((b) => (b.onclick = () => { view = b.dataset.v; note = ""; render(); }));
+
+  makeMap($("#map")).then((m) => { mp = m; drawMap(); });
+  sb.channel("cust").on("postgres_changes", { event: "*", schema: "public", table: "quotes" }, load)
+    .on("postgres_changes", { event: "*", schema: "public", table: "requests" }, load)
+    .on("postgres_changes", { event: "*", schema: "public", table: "crew_locations" }, load)
+    .on("postgres_changes", { event: "*", schema: "public", table: "payments" }, load)
+    .on("postgres_changes", { event: "*", schema: "public", table: "completions" }, load)
+    .on("postgres_changes", { event: "*", schema: "public", table: "disputes" }, load).subscribe();
+  load();
+});
+</script></body></html>
