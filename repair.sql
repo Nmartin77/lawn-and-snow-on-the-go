@@ -57,6 +57,32 @@ create or replace function request_status(rid bigint) returns text language sql 
 create or replace function booked_crew_for(cust uuid) returns boolean language sql stable security definer set search_path=public as $$
   select exists(select 1 from requests r join quotes q on q.id=r.booked_quote where r.customer_id=cust and q.company_id=auth.uid()) $$;
 
+-- Where each crew works: a base point and a radius of up to 10 miles. Only the crew can read its own row.
+create table if not exists crew_areas(
+  company_id uuid primary key references profiles on delete cascade,
+  lat double precision not null, lng double precision not null,
+  radius_miles int not null default 10 check(radius_miles between 1 and 10),
+  label text, updated_at timestamptz not null default now());
+alter table crew_areas enable row level security;
+grant select,insert,update,delete on crew_areas to authenticated;
+
+create or replace function miles_between(a1 double precision, o1 double precision, a2 double precision, o2 double precision) returns double precision
+language sql immutable as $$
+  select 3958.8 * 2 * asin(least(1, sqrt(power(sin(radians(a2-a1)/2),2) + cos(radians(a1))*cos(radians(a2))*power(sin(radians(o2-o1)/2),2)))) $$;
+create or replace function crew_in_range(rlat double precision, rlng double precision) returns boolean language sql stable security definer set search_path=public as $$
+  select rlat is not null and exists(select 1 from crew_areas a where a.company_id=auth.uid() and miles_between(a.lat,a.lng,rlat,rlng) <= least(a.radius_miles,10)) $$;
+create or replace function crew_can_quote(rid bigint) returns boolean language sql stable security definer set search_path=public as $$
+  select exists(select 1 from requests r join crew_areas a on a.company_id=auth.uid()
+    where r.id=rid and r.status='open' and r.lat is not null and miles_between(a.lat,a.lng,r.lat,r.lng) <= least(a.radius_miles,10)) $$;
+-- Crews within 10 miles of a point (shown to customers). Returns only names and rounded distance, never a crew's exact location.
+create or replace function nearby_crews(rlat double precision, rlng double precision) returns table(company_id uuid, company_name text, miles numeric)
+language sql stable security definer set search_path=public as $$
+  select p.id, p.company_name, round(miles_between(a.lat,a.lng,rlat,rlng)::numeric,1)
+  from crew_areas a join profiles p on p.id=a.company_id
+  where p.role='company' and miles_between(a.lat,a.lng,rlat,rlng) <= least(a.radius_miles,10) order by 3 $$;
+revoke execute on function nearby_crews(double precision, double precision) from public, anon;
+grant execute on function nearby_crews(double precision, double precision) to authenticated;
+
 drop policy if exists p_self on profiles;
 create policy p_self on profiles for select using(id=auth.uid());
 drop policy if exists p_self_upd on profiles;
@@ -70,10 +96,12 @@ drop policy if exists r_customer on requests;
 create policy r_customer on requests for all using(customer_id=auth.uid())
   with check(customer_id=auth.uid() and status='open' and booked_quote is null);
 drop policy if exists r_company on requests;
-create policy r_company on requests for select using(is_company() and (status='open' or quote_company(booked_quote)=auth.uid()));
+create policy r_company on requests for select using(is_company() and ((status='open' and crew_in_range(lat,lng)) or quote_company(booked_quote)=auth.uid()));
+drop policy if exists ca_own on crew_areas;
+create policy ca_own on crew_areas for all using(company_id=auth.uid()) with check(company_id=auth.uid() and is_company());
 
 drop policy if exists q_company on quotes;
-create policy q_company on quotes for all using(company_id=auth.uid()) with check(company_id=auth.uid() and is_company());
+create policy q_company on quotes for all using(company_id=auth.uid()) with check(company_id=auth.uid() and is_company() and crew_can_quote(request_id));
 drop policy if exists q_customer on quotes;
 create policy q_customer on quotes for select using(request_customer(request_id)=auth.uid());
 
@@ -102,6 +130,7 @@ create table if not exists payments(
   stripe_charge_id text not null unique,
   status text not null default 'held' check(status in('held','review','disputed','releasing','released','refunded')),
   review_ends_at timestamptz,
+  eta_at timestamptz, arrived_at timestamptz, window_ends_at timestamptz,
   created_at timestamptz not null default now(), released_at timestamptz);
 create table if not exists completions(
   id bigint generated always as identity primary key,
@@ -145,6 +174,33 @@ create policy job_photos_read on storage.objects for select to authenticated
   using(bucket_id='job-photos' and ((storage.foldername(name))[1]=auth.uid()::text
     or exists(select 1 from public.payments p where p.id::text=(storage.foldername(name))[2] and p.customer_id=auth.uid())));
 
+-- Photos on requests (from the customer) and on quotes (from the crew). Files live in the private "quote-photos" bucket.
+alter table requests add column if not exists photos text[] not null default '{}' check(coalesce(array_length(photos,1),0)<=6);
+alter table quotes add column if not exists photos text[] not null default '{}' check(coalesce(array_length(photos,1),0)<=6);
+create or replace function check_photo_paths() returns trigger language plpgsql as $$
+declare p text; owner uuid;
+begin
+  if TG_TABLE_NAME = 'requests' then owner := new.customer_id; else owner := new.company_id; end if;
+  foreach p in array new.photos loop
+    if split_part(p,'/',1) <> owner::text then raise exception 'A photo path does not belong to you.'; end if;
+  end loop;
+  return new;
+end $$;
+drop trigger if exists requests_photos on requests;
+create trigger requests_photos before insert or update on requests for each row execute function check_photo_paths();
+drop trigger if exists quotes_photos on quotes;
+create trigger quotes_photos before insert or update on quotes for each row execute function check_photo_paths();
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
+  values('quote-photos','quote-photos',false,5242880,array['image/jpeg','image/png','image/webp']) on conflict(id) do nothing;
+drop policy if exists quote_photos_upload on storage.objects;
+create policy quote_photos_upload on storage.objects for insert to authenticated
+  with check(bucket_id='quote-photos' and (storage.foldername(name))[1]=auth.uid()::text);
+drop policy if exists quote_photos_read on storage.objects;
+create policy quote_photos_read on storage.objects for select to authenticated
+  using(bucket_id='quote-photos' and ((storage.foldername(name))[1]=auth.uid()::text
+    or exists(select 1 from public.requests r where name = any(r.photos))
+    or exists(select 1 from public.quotes q where name = any(q.photos))));
+
 do $$ declare t text; begin
   foreach t in array array['requests','quotes','crew_locations','payments','completions','disputes'] loop
     begin execute format('alter publication supabase_realtime add table public.%I', t);
@@ -152,11 +208,15 @@ do $$ declare t text; begin
   end loop;
 end $$;
 
--- Update an older payments table for the 48-hour approval window.
+-- Customers may add photos to their own open requests (only the photos column can change).
+grant update(photos) on public.requests to authenticated;
+
 alter table public.payments add column if not exists review_ends_at timestamptz;
+alter table public.payments add column if not exists eta_at timestamptz;
+alter table public.payments add column if not exists arrived_at timestamptz;
+alter table public.payments add column if not exists window_ends_at timestamptz;
 alter table public.payments drop constraint if exists payments_status_check;
 alter table public.payments add constraint payments_status_check check(status in('held','review','disputed','releasing','released','refunded'));
-
 drop function if exists public.complete_request(bigint);
 
 insert into public.profiles (id, role, name, company_name)
@@ -170,4 +230,6 @@ grant select on public.profiles, public.requests, public.quotes, public.crew_loc
 grant insert, delete on public.requests to authenticated;
 grant insert, update, delete on public.quotes to authenticated;
 grant insert, update, delete on public.crew_locations to authenticated;
+grant select, insert, update, delete on public.crew_areas to authenticated;
+grant update(photos) on public.requests to authenticated;
 grant execute on function public.claim_role(text, text) to authenticated;
