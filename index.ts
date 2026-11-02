@@ -39,7 +39,7 @@ Deno.serve(async (req) => {
     if (act === "onboard" && me.role === "company") {
       let id = me.stripe_account_id;
       if (!id) {
-        id = (await stripe.accounts.create({ type: "express", email: user.email, business_profile: { name: me.company_name }, metadata: { user_id: user.id } })).id;
+        id = (await stripe.accounts.create({ type: "express", email: user.email, business_profile: { name: me.company_name }, capabilities: { transfers: { requested: true } }, metadata: { user_id: user.id } })).id;
         await db.from("profiles").update({ stripe_account_id: id }).eq("id", user.id);
       }
       const l = await stripe.accountLinks.create({ account: id, refresh_url: SITE + "/company.html", return_url: SITE + "/company.html", type: "account_onboarding" });
@@ -47,8 +47,10 @@ Deno.serve(async (req) => {
     }
     if (act === "refresh" && me.stripe_account_id) {
       const a = await stripe.accounts.retrieve(me.stripe_account_id);
-      await db.from("profiles").update({ charges_enabled: a.charges_enabled }).eq("id", user.id);
-      return out({ charges_enabled: a.charges_enabled });
+      // A crew is ready to be paid when Stripe has switched on its "transfers" capability.
+      const ready = a.capabilities?.transfers === "active";
+      await db.from("profiles").update({ charges_enabled: ready }).eq("id", user.id);
+      return out({ charges_enabled: ready });
     }
     if (act === "checkout" && me.role === "customer") {
       const { data: q } = await db.from("quotes")
