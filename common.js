@@ -6,6 +6,7 @@ const cleanUrl = (u) => { try { return new URL(u).origin; } catch (e) { return u
 export const sb = createClient(cleanUrl(CONFIG.SUPABASE_URL), CONFIG.SUPABASE_ANON_KEY);
 export const $ = (s, r = document) => r.querySelector(s);
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+export const SERVICE_FEE = 500; // cents: the customer's flat service fee per completed job or visit
 export const usd = (c) => "$" + (c / 100).toFixed(2).replace(/\.00$/, "");
 export const PLANS = { once: "One-time", weekly: "Weekly", biweekly: "Every 2 weeks", monthly: "Monthly" };
 export const SERVICES = { "Lawn mowing": 12, "Hedge trimming": 30, "Mulch install": 45, "Seasonal cleanup": 25, "Sod or seeding": 70, "Snow removal": 18 };
@@ -142,12 +143,12 @@ function authScreen(role, done, notice = "") {
   draw();
 }
 
-const WAIVER = 3; // raise this number to make everyone re-accept updated terms
+const WAIVER = 4; // raise this number to make everyone re-accept updated terms
 const TERMS = [
   ["What this app does", "Lawn and Snow on the Go is a marketplace that connects customers with independent lawn, landscape and snow removal companies. It does not perform the work, does not employ the crews, and does not supervise, direct or control their work."],
   ["Release of liability", "To the fullest extent permitted by law, I release and hold harmless Lawn and Snow on the Go, its owners, employees and affiliates from all claims, losses and liability, including those caused by negligence, for any damage to property or injury to or death of any person arising from my use of the app or from any services arranged through it."],
   ["Assumption of risk", "I understand that lawn, landscape and snow removal work involves risks, including equipment hazards, slips and falls, vehicle and weather hazards, and damage to lawns, plants, hardscape, vehicles and structures. I accept those risks."],
-  ["Fees and subscriptions", "Lawn and Snow on the Go keeps 15% of the total cost of each service as a platform fee. Customers see it included in the price, and the crew receives the other 85%. A subscription repeats the service on the schedule chosen until it is cancelled."],
+  ["Fees and subscriptions", "Lawn and Snow on the Go keeps 15% of the total cost of each service as a platform fee. Customers see it included in the price, and the crew receives the other 85%. Customers also pay a flat $5 service fee for each completed job or visit, which is added at checkout and refunded if the payment is refunded. A subscription repeats the service on the schedule chosen until it is cancelled."],
   ["Indemnity", "I agree to defend and reimburse Lawn and Snow on the Go for any claim, cost or expense, including attorney fees, arising from my use of the app, my conduct, my work or crew, or my breach of this agreement."],
   ["No guarantees", "Prices, estimates, ratings, locations and arrival times shown in the app are informational only and may be wrong. The app is provided as is."],
   ["If part is invalid", "If a court finds part of this agreement unenforceable, the rest stays in effect."],
