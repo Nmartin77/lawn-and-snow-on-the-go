@@ -26,13 +26,19 @@ boot("customer", async (me) => {
     ? near.length + " crew" + (near.length === 1 ? "" : "s") + " within 10 miles of " + esc(nearAddr) + " can see your request and send quotes."
     : "No crews have joined within 10 miles of " + esc(nearAddr) + " yet. Your request stays open, and crews that join nearby will see it."}</p>
     ${near.map((c) => `<div class="quote"><strong>${esc(c.company_name)}</strong><span class="meta">${c.miles} mi away</span></div>`).join("")}</div>` : "";
+  // Arrival time and the crew's 2-hour window to finish.
+  const sched = (p) => {
+    const t = (d) => new Date(d).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+    const late = p.window_ends_at && Date.now() > Date.parse(p.window_ends_at);
+    return `<p>${p.arrived_at ? `The crew arrived ${t(p.arrived_at)}.` : p.eta_at ? `Estimated arrival: <strong>${t(p.eta_at)}</strong>.` : "The crew has not set an arrival time yet."}${p.window_ends_at ? ` They have a 2-hour window to finish, until <strong>${t(p.window_ends_at)}</strong>.${late ? " They are past that window." : ""}` : ""}</p>`;
+  };
   const state = (p, c) => p.status === "released" ? "Finished " + new Date(c?.created_at || p.released_at).toLocaleDateString() + ". Payment released to the crew."
     : p.status === "review" ? "The crew finished. Approve by " + new Date(p.review_ends_at).toLocaleString() + ", or the payment is released automatically."
     : p.status === "disputed" ? "Under review. The payment is on hold." : p.status === "refunded" ? "Refunded." : "Waiting for the crew to finish the job.";
   const visit = (p) => {
     const c = comps.find((x) => x.payment_id === p.id);
     return `<div class="quote"><div><strong>${usd(p.amount_cents)}</strong> <span class="meta">paid ${new Date(p.created_at).toLocaleDateString()}</span>
-      <p class="meta">${state(p, c)}</p>${p.status === "review" ? `<button class="btn sm" data-act="approve" data-id="${p.id}">Approve and release payment</button>` : ""}${c?.notes ? `<p>${esc(c.notes)}</p>` : ""}</div>
+      <p class="meta">${state(p, c)}</p>${p.status === "held" ? sched(p) : ""}${p.status === "review" ? `<button class="btn sm" data-act="approve" data-id="${p.id}">Approve and release payment</button>` : ""}${c?.notes ? `<p>${esc(c.notes)}</p>` : ""}</div>
       ${c ? `<div class="row">${c.photos.map((x) => urls[x] ? `<a href="${urls[x]}" target="_blank" rel="noopener"><img src="${urls[x]}" alt="Photo of the finished work" width="72" height="72" style="object-fit:cover;border-radius:8px"></a>` : "").join("")}</div>` : ""}</div>`;
   };
   const activeCard = (r) => {
