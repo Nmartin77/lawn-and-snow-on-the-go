@@ -32,13 +32,24 @@ boot("company", async (me) => {
            <p class="meta">Price per ${per}. You keep 85% after the 15% platform fee.</p>`}</article>`;
   };
   const when = (d) => new Date(d).toLocaleDateString();
+  const hm = (d) => new Date(d).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+  const local = (d) => { const t = new Date(d); return new Date(t.getTime() - t.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+  // Arrival time and the 2-hour window to finish.
+  const schedule = (p) => {
+    const late = p.window_ends_at && Date.now() > Date.parse(p.window_ends_at);
+    const info = p.arrived_at ? `Arrived ${hm(p.arrived_at)}. Finish by ${hm(p.window_ends_at)}${late ? ". You are past the 2-hour window" : ""}.`
+      : p.eta_at ? `ETA sent: ${hm(p.eta_at)}. You have a 2-hour window to finish, until ${hm(p.window_ends_at)}.`
+      : "Tell the customer when you will arrive. You then have a 2-hour window to finish the job.";
+    return `<form class="panel" data-eta="${p.id}"><p class="meta">${info}</p>${p.arrived_at ? "" : `<label>Estimated arrival<input type="datetime-local" name="eta" value="${p.eta_at ? local(p.eta_at) : ""}" required></label>
+      <p style="margin-top:12px"><button class="btn sm">${p.eta_at ? "Update ETA" : "Send ETA to customer"}</button> <button type="button" class="btn sm ghost" data-act="arrive" data-id="${p.id}">I have arrived</button></p>`}</form>`;
+  };
   const visit = (p) => p.status === "released"
     ? `<div class="quote"><span>Paid out ${usd(p.crew_cents)} on ${when(p.released_at)}</span><span class="tag">Paid</span></div>`
     : p.status === "review" ? `<p class="meta">Finished. The customer has until ${new Date(p.review_ends_at).toLocaleString()} to approve or report a problem. Your ${usd(p.crew_cents)} is released after that.</p>`
     : p.status === "disputed" ? `<p class="meta">On hold: the customer reported a problem. We will review the photos and contact you.</p>`
     : p.status === "refunded" ? `<p class="meta">Refunded to the customer.</p>`
     : p.status === "releasing" ? `<p class="meta">Releasing your payout...</p>`
-    : `<form class="panel" data-pid="${p.id}"><p class="meta">The customer paid ${usd(p.amount_cents)}. You receive ${usd(p.crew_cents)} after you finish the job, upload photos, and the customer approves or 48 hours pass.</p>
+    : schedule(p) + `<form class="panel" data-pid="${p.id}"><p class="meta">The customer paid ${usd(p.amount_cents)}. You receive ${usd(p.crew_cents)} after you finish the job, upload photos, and the customer approves or 48 hours pass.</p>
         <label>Photos of the finished work (required)<input type="file" name="photos" accept="image/*" multiple required></label>
         <label>Notes (optional)<input name="notes" maxlength="500"></label><button class="btn sm" style="margin-top:12px">Finish job and get paid</button></form>`;
   const won = (r) => {
@@ -84,6 +95,7 @@ boot("company", async (me) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     try {
       if (b.dataset.act === "useloc") { hereLoc = await myLocation(); b.textContent = "Location set. Now save your service area."; return; }
+      if (b.dataset.act === "arrive") { await api("arrive", { payment_id: +b.dataset.id }); note = "Marked as arrived. Your 2-hour window has started."; await load(); return; }
       if (b.dataset.act === "onboard") location.href = (await api("onboard")).url;
       if (b.dataset.act === "done") { await sb.rpc("complete_request", { rid: +b.dataset.id }); await load(); }
     } catch (x) { note = x.message; render(); }
@@ -91,6 +103,13 @@ boot("company", async (me) => {
   app.onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
+    if (e.target.dataset.eta) {
+      try {
+        await api("eta", { payment_id: +e.target.dataset.eta, eta_at: new Date(f.get("eta")).toISOString() });
+        note = "ETA sent to the customer.";
+      } catch (x) { note = x.message; }
+      return load();
+    }
     if (e.target.id === "af") {
       try {
         const addr = String(f.get("addr") || "").trim(), ll = hereLoc || await geocode(addr);
