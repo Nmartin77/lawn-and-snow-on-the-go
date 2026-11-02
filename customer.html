@@ -20,7 +20,7 @@ boot("customer", async (me) => {
         + `<p><button class="btn sm ghost" data-act="del" data-id="${r.id}">Delete request</button></p>`
       : r.status === "booked" && r.plan !== "once" ? `<p><button class="btn sm ghost" data-act="cancel" data-id="${r.id}">Cancel subscription</button></p>` : "";
     return `<article class="job"><div class="job-h"><div><h3>${esc(r.service)}</h3><div class="meta">${esc(r.address)} · ${r.size_sqft.toLocaleString()} sq ft · ${PLANS[r.plan]}</div></div>
-      <span class="tag">${r.status === "open" ? qs.length + " quote" + (qs.length === 1 ? "" : "s") : r.status}</span></div>${thumbs(r.photos, pu)}${r.status === "open" ? `<label style="font-size:14px">Add photos to this request (up to 6 in total)<input type="file" class="addph" data-id="${r.id}" accept="image/*" multiple></label>` : ""}${body}</article>`;
+      <span class="tag">${r.status === "open" ? qs.length + " quote" + (qs.length === 1 ? "" : "s") : r.status}</span></div>${thumbs(r.photos, pu)}${body}</article>`;
   };
   const state = (p, c) => p.status === "released" ? "Finished " + new Date(c?.created_at || p.released_at).toLocaleDateString() + ". Payment released to the crew."
     : p.status === "review" ? "The crew finished. Approve by " + new Date(p.review_ends_at).toLocaleString() + ", or the payment is released automatically."
@@ -94,19 +94,6 @@ boot("customer", async (me) => {
       if (b.dataset.act === "approve") { await api("approve", { payment_id: id }); note = "Payment released to the crew."; await load(); }
       if (b.dataset.act === "del") { await sb.from("requests").delete().eq("id", id); await load(); }
     } catch (x) { note = x.message; render(); }
-  };
-  app.onchange = async (e) => {
-    if (!e.target.classList.contains("addph")) return;
-    const r = reqs.find((x) => x.id === +e.target.dataset.id);
-    try {
-      const room = 6 - (r.photos || []).length;
-      if (room <= 0) throw new Error("A request can have up to 6 photos.");
-      const added = await uploadPhotos([...e.target.files].slice(0, room), me.id);
-      const { error } = await sb.from("requests").update({ photos: [...(r.photos || []), ...added] }).eq("id", r.id);
-      if (error) throw error;
-      note = "Photos added.";
-    } catch (x) { note = x.message; }
-    await load();
   };
   app.onsubmit = async (e) => {
     e.preventDefault();
