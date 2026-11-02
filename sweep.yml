@@ -1,0 +1,10 @@
+name: Release payments after 48 hours
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS -X POST "${{ secrets.SUPABASE_URL }}/functions/v1/api/sweep" -H "x-cron-secret: ${{ secrets.CRON_SECRET }}"
