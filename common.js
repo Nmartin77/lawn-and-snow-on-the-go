@@ -1,7 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { CONFIG } from "./config.js";
 
-export const sb = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+// Keep only the address part of the URL, so a trailing slash or an extra path such as /rest/v1/ cannot break requests.
+const cleanUrl = (u) => { try { return new URL(u).origin; } catch (e) { return u; } };
+export const sb = createClient(cleanUrl(CONFIG.SUPABASE_URL), CONFIG.SUPABASE_ANON_KEY);
 export const $ = (s, r = document) => r.querySelector(s);
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const usd = (c) => "$" + (c / 100).toFixed(2).replace(/\.00$/, "");
@@ -12,7 +14,7 @@ export const est = (s, sz) => Math.max(45, Math.round((SERVICES[s] * sz) / 1000 
 // Calls the Edge Function (Stripe and other server-side work).
 export async function api(action, body = {}) {
   const { data: { session } } = await sb.auth.getSession();
-  const r = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/api/${action}`, {
+  const r = await fetch(`${cleanUrl(CONFIG.SUPABASE_URL)}/functions/v1/api/${action}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token, apikey: CONFIG.SUPABASE_ANON_KEY },
     body: JSON.stringify(body),
@@ -212,12 +214,91 @@ async function securityModal() {
   };
 }
 
+// ---- Photos on requests and quotes ----
+const shrinkImg = (file) => new Promise((res, rej) => {
+  const img = new Image(), u = URL.createObjectURL(file);
+  img.onload = () => {
+    const k = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement("canvas");
+    cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+    cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(u);
+    cv.toBlob((b) => (b ? res(b) : rej(new Error("Could not read that photo."))), "image/jpeg", 0.82);
+  };
+  img.onerror = () => rej(new Error("Could not read that photo."));
+  img.src = u;
+});
+// Uploads up to 6 photos to the private bucket and returns their paths.
+export async function uploadPhotos(files, uid) {
+  const list = [...files].filter((f) => f.size).slice(0, 6), folder = crypto.randomUUID(), paths = [];
+  for (const [i, f] of list.entries()) {
+    const path = `${uid}/${folder}/${i}.jpg`;
+    const { error } = await sb.storage.from("quote-photos").upload(path, await shrinkImg(f), { contentType: "image/jpeg" });
+    if (error) throw error;
+    paths.push(path);
+  }
+  return paths;
+}
+export async function photoUrls(paths) {
+  const out = {}, list = [...new Set(paths)];
+  if (list.length) ((await sb.storage.from("quote-photos").createSignedUrls(list, 3600)).data || []).forEach((x) => { if (x.signedUrl) out[x.path] = x.signedUrl; });
+  return out;
+}
+export const thumbs = (paths, urls) => (paths || []).length
+  ? `<div class="row" style="justify-content:flex-start;margin-top:8px">${paths.map((p) => urls[p] ? `<a href="${urls[p]}" target="_blank" rel="noopener"><img src="${urls[p]}" alt="Photo" width="72" height="72" style="object-fit:cover;border-radius:8px"></a>` : "").join("")}</div>` : "";
+
+const ask = (title, label) => new Promise((res) => {
+  const g = modal(`<h2>${title}</h2><label>${label}<textarea id="t" rows="4" maxlength="1500"></textarea></label><p class="meta err" id="m"></p><button class="btn" id="go">Send</button><button class="btn ghost" id="no">Cancel</button>`);
+  $("#no", g).onclick = () => { close(g); res(null); };
+  $("#go", g).onclick = () => {
+    const v = $("#t", g).value.trim();
+    if (v.length < 10) return ($("#m", g).textContent = "Please write at least 10 characters.");
+    close(g); res(v);
+  };
+});
+
+// The "Refunds and disputes" panel from the menu.
+async function disputePanel(role) {
+  const g = modal(`<h2>Refunds and disputes</h2><p class="meta">${role === "customer"
+    ? "After a crew finishes a job you have 48 hours to approve it or report a problem. If you do nothing, the payment is released to the crew. Before the crew finishes, you can ask for a refund. We review the photos and messages, then refund you or pay the crew."
+    : "If a customer reports a problem, the payment is held while we review your photos and notes. We will contact you."}</p><div id="dp"><p class="meta">Loading...</p></div><button class="btn ghost" id="x">Close</button>`);
+  $("#x", g).onclick = () => close(g);
+  const money = (c) => "$" + (c / 100).toFixed(2).replace(/\.00$/, "");
+  const draw = async () => {
+    const [pm, ds] = await Promise.all([sb.from("payments").select("*").order("created_at", { ascending: false }), sb.from("disputes").select("*").order("created_at", { ascending: false })]);
+    const pays = pm.data || [], disp = ds.data || [], ids = [...new Set(pays.map((x) => x.request_id))];
+    const rq = Object.fromEntries(((ids.length ? (await sb.from("requests").select("id,service,address").in("id", ids)).data : []) || []).map((r) => [r.id, r]));
+    const rows = pays.filter((x) => ["held", "review", "disputed"].includes(x.status)).map((x) => {
+      const r = rq[x.request_id] || {};
+      const txt = x.status === "held" ? "Waiting for the crew to finish." : x.status === "review"
+        ? `Finished. ${role === "customer" ? "Approve or report a problem by" : "The customer has until"} ${new Date(x.review_ends_at).toLocaleString()}.` : "On hold while we review.";
+      const acts = role !== "customer" ? "" : x.status === "held" ? `<button class="btn sm ghost" data-a="refund" data-id="${x.id}">Request refund</button>`
+        : x.status === "review" ? `<button class="btn sm" data-a="approve" data-id="${x.id}">Approve now</button> <button class="btn sm ghost" data-a="dispute" data-id="${x.id}">Report a problem</button>` : "";
+      return `<div class="quote"><div><strong>${esc(r.service || "Job")}</strong> \u00b7 ${money(x.amount_cents)}<p class="meta">${esc(r.address || "")}</p><p class="meta">${txt}</p></div><div>${acts}</div></div>`;
+    }).join("");
+    const hist = disp.map((d) => `<div class="quote"><div><strong>${d.kind === "refund" ? "Refund request" : "Dispute"}</strong><p class="meta">${esc(d.reason)}</p></div><span class="tag">${d.status === "open" ? "Under review" : d.status === "refunded" ? "Refunded" : "Paid to crew"}</span></div>`).join("");
+    $("#dp", g).innerHTML = `<h3>Payments you can act on</h3>${rows || `<p class="meta">None right now.</p>`}<h3 style="margin-top:16px">Refund requests and disputes</h3>${hist || `<p class="meta">None yet.</p>`}<p class="meta err" id="m"></p>`;
+  };
+  $("#dp", g).onclick = async (e) => {
+    const b = e.target.closest("[data-a]"); if (!b) return;
+    const id = +b.dataset.id, a = b.dataset.a;
+    try {
+      if (a === "approve") await api("approve", { payment_id: id });
+      else {
+        const why = await ask(a === "refund" ? "Request a refund" : "Report a problem", "What went wrong?");
+        if (!why) return;
+        await api("dispute", { payment_id: id, kind: a, reason: why });
+      }
+      await draw();
+    } catch (x) { $("#m", g).textContent = x.message; }
+  };
+  draw();
+}
+
 export async function boot(role, start, tried = false) {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return authScreen(role, () => boot(role, start));
   await mfaGate();
   const { data: p, error } = await sb.from("profiles").select("*").eq("id", session.user.id).single();
-  if (error || !p) { await sb.auth.signOut(); return authScreen(role, () => boot(role, start), "We could not load your account. Try again."); }
+  if (error || !p) { await sb.auth.signOut(); return authScreen(role, () => boot(role, start), `We could not load your account (${error ? error.message : "no profile found"}). Try again.`); }
   // A brand-new account made with Google or Apple has no role yet, so set it from the app being used.
   if (p.role !== role && !p.waiver_version && !tried) {
     const co = role === "company" ? await askCompany() : null;
@@ -230,8 +311,18 @@ export async function boot(role, start, tried = false) {
   }
   p.email = session.user.email;
   if ((p.waiver_version || 0) < WAIVER) await waiver(role, p);
-  $("#who").innerHTML = `<span class="meta">${esc(p.name || p.email)}</span> <button class="btn sm ghost" id="sec">Security</button> <button class="btn sm ghost" id="out">Sign out</button>`;
+  $("#who").innerHTML = `<span class="meta">${esc(p.name || p.email)}</span>
+    <span style="position:relative;display:inline-block"><button class="btn sm ghost" id="mb" aria-label="Menu" aria-haspopup="true" aria-expanded="false">&#9776;</button>
+    <div id="mn" hidden style="position:absolute;right:0;top:110%;z-index:50;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:6px;min-width:210px;box-shadow:0 6px 20px rgba(0,0,0,.15)">
+    <button class="btn sm ghost" id="m-d" style="display:block;width:100%;border:0;text-align:left;margin:0">Refunds and disputes</button>
+    <a href="terms.html" style="display:block;padding:8px 12px">Terms of service</a><a href="privacy.html" style="display:block;padding:8px 12px">Privacy policy</a></div></span>
+    <button class="btn sm ghost" id="sec">Security</button> <button class="btn sm ghost" id="out">Sign out</button>`;
   $("#sec").onclick = securityModal;
+  const mb = $("#mb"), mn = $("#mn"), toggle = (open) => { mn.hidden = !open; mb.setAttribute("aria-expanded", String(open)); };
+  mb.onclick = (e) => { e.stopPropagation(); toggle(mn.hidden); };
+  document.addEventListener("click", () => toggle(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggle(false); });
+  $("#m-d").onclick = () => { toggle(false); disputePanel(role); };
   $("#out").onclick = async () => { await sb.auth.signOut(); location.href = here(); };
   start(p);
 }
