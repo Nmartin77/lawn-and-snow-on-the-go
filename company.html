@@ -5,9 +5,9 @@
 <header><a class="brand" href="index.html" style="text-decoration:none">Lawn and Snow <i>on the Go</i></a><div id="who"></div></header>
 <div id="map" class="map"></div><main id="app"></main><footer class="meta" style="margin-top:32px"><a href="terms.html">Terms of service</a> · <a href="privacy.html">Privacy policy</a></footer></div>
 <script type="module">
-import { sb, $, esc, usd, PLANS, est, api, boot, makeMap, uploadPhotos, photoUrls, thumbs, geocode, myLocation, miles } from "./common.js";
+import { sb, $, esc, usd, PLANS, est, api, boot, makeMap, uploadPhotos, photoUrls, thumbs } from "./common.js";
 boot("company", async (me) => {
-  let reqs = [], mine = [], pays = [], pu = {}, area = null, hereLoc = null, cust = {}, note = "", watch = null, last = 0, mp = null, pins = [];
+  let reqs = [], mine = [], pays = [], pu = {}, cust = {}, note = "", watch = null, last = 0, mp = null, pins = [];
   const app = $("#app");
   // Shrink phone photos before upload (max 1600 px, JPEG).
   const shrink = (file) => new Promise((res, rej) => {
@@ -25,7 +25,7 @@ boot("company", async (me) => {
 
   const job = (r) => {
     const q = mine.find((x) => x.request_id === r.id), per = r.plan === "once" ? "job" : "visit";
-    return `<article class="job"><h3>${esc(r.service)}</h3><div class="meta">${esc(r.address)} · ${r.size_sqft.toLocaleString()} sq ft · ${PLANS[r.plan]}${area && r.lat ? " · " + miles(area.lat, area.lng, r.lat, r.lng).toFixed(1) + " mi away" : ""} · by ${esc(r.preferred_date || "")}</div>
+    return `<article class="job"><h3>${esc(r.service)}</h3><div class="meta">${esc(r.address)} · ${r.size_sqft.toLocaleString()} sq ft · ${PLANS[r.plan]} · by ${esc(r.preferred_date || "")}</div>
       ${r.notes ? `<p class="meta">${esc(r.notes)}</p>` : ""}${thumbs(r.photos, pu)}
       ${q ? `<div class="quote"><span>You quoted · you keep ${usd(q.price_cents * 0.85)}</span><span class="price">${usd(q.price_cents)}${r.plan === "once" ? "" : "/visit"}</span></div>${thumbs(q.photos, pu)}`
         : `<form class="row" data-rid="${r.id}"><input name="price" type="number" min="1" step="0.01" value="${est(r.service, r.size_sqft)}" aria-label="Price in dollars"><input name="msg" placeholder="Short message" aria-label="Message"><label style="flex-basis:100%;margin:0">Photos for your quote, such as similar past work (optional, up to 6)<input type="file" name="qphotos" accept="image/*" multiple></label><button class="btn sm">Send quote</button></form>
@@ -46,19 +46,13 @@ boot("company", async (me) => {
     return `<article class="job"><div class="job-h"><div><strong>${esc(r.service)}</strong><p class="meta">${esc(c.name || "Customer")} · ${esc(c.phone || "")}<br>${esc(r.address)} · ${PLANS[r.plan]}</p></div><span class="tag">${r.status === "done" ? "Complete" : "Active"}</span></div>
       ${ps.length ? ps.map(visit).join("") : `<p class="meta">Waiting for the customer\u2019s payment to finish processing.</p>`}</article>`;
   };
-  const areaForm = () => `<form id="af"><p class="meta">${area
-      ? `You see open jobs within ${area.radius_miles} mile${area.radius_miles === 1 ? "" : "s"} of ${esc(area.label || "your base")}.`
-      : "Set your service area to start seeing jobs near you."}</p>
-    <label>Base address<input name="addr" value="${esc(area?.label || "")}" placeholder="Street, city, state"></label>
-    <label>Service radius (up to 10 miles)<select name="radius">${[1, 2, 3, 5, 7, 10].map((n) => `<option value="${n}" ${n === (area?.radius_miles || 10) ? "selected" : ""}>${n} mile${n === 1 ? "" : "s"}</option>`).join("")}</select></label>
-    <p style="margin-top:12px"><button class="btn sm">Save service area</button> <button type="button" class="btn sm ghost" data-act="useloc">Use my current location</button></p></form>`;
   const render = () => {
     const open = reqs.filter((r) => r.status === "open");
     const wonJobs = reqs.filter((r) => ["booked", "done"].includes(r.status) && mine.some((q) => q.id === r.booked_quote));
     app.innerHTML = (note ? `<p class="panel" role="status">${esc(note)}</p>` : "")
       + (me.charges_enabled ? "" : `<div class="panel"><h2>Set up payouts</h2><p class="meta">Connect a bank account with Stripe to receive 85% of each job. You can send quotes now, but customers can only book you once payouts are active.</p><button class="btn" data-act="onboard">Set up payouts</button></div>`)
       + `<div class="grid"><section><h2>Open jobs</h2>${open.length ? open.map(job).join("") : `<p class="empty">No open jobs right now.</p>`}</section>
-        <section class="panel"><h2>${esc(me.company_name)}</h2>${areaForm()}
+        <section class="panel"><h2>${esc(me.company_name)}</h2>
         <label class="chk"><input type="checkbox" id="loc" ${watch !== null ? "checked" : ""}> Share my live location with booked customers</label>
         <h3 style="margin-top:16px">Active jobs</h3>${wonJobs.length ? wonJobs.map(won).join("") : `<p class="meta">Win a quote and it shows up here.</p>`}</section></div>`;
   };
@@ -66,14 +60,10 @@ boot("company", async (me) => {
     if (!mp) return;
     pins.forEach((x) => x.setMap(null)); pins = [];
     reqs.filter((r) => r.lat && r.status === "open").forEach((r) => pins.push(new mp.m.Marker({ map: mp.map, position: { lat: r.lat, lng: r.lng }, title: r.service })));
-    if (area) {
-      pins.push(new mp.m.Circle({ map: mp.map, center: { lat: area.lat, lng: area.lng }, radius: area.radius_miles * 1609.34, strokeColor: "#1F5233", fillColor: "#1F5233", fillOpacity: 0.08 }));
-      mp.map.setCenter({ lat: area.lat, lng: area.lng });
-    }
   };
   const load = async () => {
-    const [r, q, pm, ar] = await Promise.all([sb.from("requests").select("*").order("created_at", { ascending: false }), sb.from("quotes").select("*").eq("company_id", me.id), sb.from("payments").select("*").order("created_at", { ascending: false }), sb.from("crew_areas").select("*").eq("company_id", me.id).maybeSingle()]);
-    reqs = r.data || []; mine = q.data || []; pays = pm.data || []; area = ar.data || null;
+    const [r, q, pm] = await Promise.all([sb.from("requests").select("*").order("created_at", { ascending: false }), sb.from("quotes").select("*").eq("company_id", me.id), sb.from("payments").select("*").order("created_at", { ascending: false })]);
+    reqs = r.data || []; mine = q.data || []; pays = pm.data || [];
     pu = await photoUrls([...reqs.flatMap((x) => x.photos || []), ...mine.flatMap((x) => x.photos || [])]);
     const ids = [...new Set(reqs.map((x) => x.customer_id))];
     cust = Object.fromEntries(((await sb.from("profiles").select("id,name,phone").in("id", ids)).data || []).map((p) => [p.id, p]));
@@ -83,7 +73,6 @@ boot("company", async (me) => {
   app.onclick = async (e) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     try {
-      if (b.dataset.act === "useloc") { hereLoc = await myLocation(); b.textContent = "Location set. Now save your service area."; return; }
       if (b.dataset.act === "onboard") location.href = (await api("onboard")).url;
       if (b.dataset.act === "done") { await sb.rpc("complete_request", { rid: +b.dataset.id }); await load(); }
     } catch (x) { note = x.message; render(); }
@@ -91,16 +80,6 @@ boot("company", async (me) => {
   app.onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    if (e.target.id === "af") {
-      try {
-        const addr = String(f.get("addr") || "").trim(), ll = hereLoc || await geocode(addr);
-        if (!ll.lat) throw new Error("We couldn\u2019t find that address. Add the city and state, or use your current location.");
-        const { error } = await sb.from("crew_areas").upsert({ company_id: me.id, lat: ll.lat, lng: ll.lng, radius_miles: +f.get("radius"), label: addr || "Current location", updated_at: new Date().toISOString() });
-        if (error) throw error;
-        hereLoc = null; note = "Service area saved.";
-      } catch (x) { note = x.message; }
-      return load();
-    }
     if (e.target.dataset.pid) {
       const pid = +e.target.dataset.pid, files = f.getAll("photos").filter((x) => x.size).slice(0, 10), btn = e.target.querySelector("button");
       btn.disabled = true; btn.textContent = "Uploading...";
