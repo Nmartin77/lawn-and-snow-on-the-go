@@ -36,10 +36,24 @@ export const loadMaps = () => (mapsP ??= new Promise((res) => {
 }));
 export async function geocode(address) {
   const m = await loadMaps();
-  if (!m) return {};
+  if (!m) { // No Google key yet: fall back to OpenStreetMap's free address lookup.
+    try {
+      const j = await (await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(address))).json();
+      return j[0] ? { lat: +j[0].lat, lng: +j[0].lon } : {};
+    } catch (e) { return {}; }
+  }
   return new Promise((r) => new m.Geocoder().geocode({ address }, (x, st) =>
     r(st === "OK" ? { lat: x[0].geometry.location.lat(), lng: x[0].geometry.location.lng() } : {})));
 }
+// Straight-line distance in miles.
+export const miles = (a1, o1, a2, o2) => {
+  const k = Math.PI / 180, d = Math.sin(((a2 - a1) * k) / 2) ** 2 + Math.cos(a1 * k) * Math.cos(a2 * k) * Math.sin(((o2 - o1) * k) / 2) ** 2;
+  return 3958.8 * 2 * Math.asin(Math.min(1, Math.sqrt(d)));
+};
+// Asks the browser for the device's current location.
+export const myLocation = () => new Promise((res, rej) => navigator.geolocation
+  ? navigator.geolocation.getCurrentPosition((p) => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => rej(new Error("Location permission was denied.")), { timeout: 10000 })
+  : rej(new Error("This device can\u2019t share its location.")));
 export async function makeMap(el) {
   const m = await loadMaps();
   if (!m) { el.textContent = "Add a Google Maps key in config.js to show the live map."; return null; }
