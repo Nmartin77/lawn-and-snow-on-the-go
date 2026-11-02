@@ -1,4 +1,4 @@
-// One Edge Function for everything that needs secrets: Stripe Connect, checkout, cancel, webhook.
+// One Edge Function for everything that needs secrets: Stripe Connect, checkout, payouts, cancel, webhook.
 import Stripe from "https://esm.sh/stripe@14?target=denonext";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -6,6 +6,8 @@ const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, { apiVersion: "202
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const SITE = Deno.env.get("SITE_URL")!; // e.g. https://YOUR-USERNAME.github.io/lawn-and-snow-on-the-go (no trailing slash)
 const FEE = 0.15; // platform fee: 15% of the job total
+const WINDOW_HOURS = 2; // the crew has this long to finish after arriving (or after the ETA)
+const REVIEW_HOURS = 48; // how long the customer has to approve or report a problem after the crew finishes
 const PLAN: Record<string, { interval: "week" | "month"; interval_count: number }> = {
   weekly: { interval: "week", interval_count: 1 },
   biweekly: { interval: "week", interval_count: 2 },
@@ -23,11 +25,14 @@ Deno.serve(async (req) => {
   const act = new URL(req.url).pathname.split("/").pop();
   if (act === "webhook") return webhook(req);
 
+  // Scheduled job (GitHub Actions) that releases payments whose 48 hours are up.
+  if (act === "sweep" && req.headers.get("x-cron-secret") && req.headers.get("x-cron-secret") === Deno.env.get("CRON_SECRET")) return out({ released: await sweep() });
   const token = (req.headers.get("authorization") || "").replace("Bearer ", "");
   const { data: { user } } = await db.auth.getUser(token);
   if (!user) return out({ error: "Sign in first." }, 401);
   const body = await req.json().catch(() => ({}));
   const { data: me } = await db.from("profiles").select("*").eq("id", user.id).single();
+  const isAdmin = (Deno.env.get("ADMIN_EMAILS") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).includes((user.email || "").toLowerCase());
 
   try {
     if (act === "onboard" && me.role === "company") {
@@ -65,11 +70,87 @@ Deno.serve(async (req) => {
         },
       };
       const common = { customer: cust, line_items: [item], metadata: meta, success_url: SITE + "/customer.html?paid=1", cancel_url: SITE + "/customer.html" };
-      const dest = q.company.stripe_account_id;
+      // The customer pays us. The crew's share is transferred only after the job is finished (see "complete").
       const s = await stripe.checkout.sessions.create(plan === "once"
-        ? { ...common, mode: "payment", payment_intent_data: { application_fee_amount: Math.round(q.price_cents * FEE), transfer_data: { destination: dest }, setup_future_usage: "off_session", metadata: meta } }
-        : { ...common, mode: "subscription", subscription_data: { application_fee_percent: FEE * 100, transfer_data: { destination: dest }, metadata: meta } });
+        ? { ...common, mode: "payment", payment_intent_data: { transfer_group: `req_${q.request_id}`, setup_future_usage: "off_session", metadata: meta } }
+        : { ...common, mode: "subscription", subscription_data: { metadata: meta } });
       return out({ url: s.url });
+    }
+    if (act === "complete" && me.role === "company") {
+      const { payment_id, notes, photos } = body;
+      const ok = Array.isArray(photos) && photos.length >= 1 && photos.length <= 10 &&
+        photos.every((p: unknown) => typeof p === "string" && p.startsWith(`${user.id}/${payment_id}/`));
+      if (!ok) return out({ error: "Add at least one photo of the finished work." }, 400);
+      // Start the customer's 48-hour approval window. The crew is paid when the customer approves or the window ends.
+      const ends = new Date(Date.now() + REVIEW_HOURS * 3600e3).toISOString();
+      const { data: p } = await db.from("payments").update({ status: "review", review_ends_at: ends })
+        .eq("id", payment_id).eq("company_id", user.id).eq("status", "held").select().maybeSingle();
+      if (!p) return out({ error: "This job is not ready to be finished." }, 400);
+      const { error } = await db.from("completions").insert({ payment_id: p.id, request_id: p.request_id, company_id: user.id, notes: String(notes || "").slice(0, 1000), photos });
+      if (error) { await db.from("payments").update({ status: "held", review_ends_at: null }).eq("id", p.id); throw error; }
+      return out({ ok: true, review_ends_at: ends });
+    }
+    if (act === "eta" && me.role === "company") {
+      const t = Date.parse(body.eta_at);
+      if (!Number.isFinite(t) || t < Date.now() - 3600e3 || t > Date.now() + 14 * 86400e3) return out({ error: "Pick an arrival time within the next 14 days." }, 400);
+      const { data: p } = await db.from("payments")
+        .update({ eta_at: new Date(t).toISOString(), window_ends_at: new Date(t + WINDOW_HOURS * 3600e3).toISOString() })
+        .eq("id", body.payment_id).eq("company_id", user.id).eq("status", "held").is("arrived_at", null).select("id").maybeSingle();
+      return p ? out({ ok: true }) : out({ error: "This job's arrival time can't be changed now." }, 400);
+    }
+    if (act === "arrive" && me.role === "company") {
+      const now = Date.now();
+      const { data: p } = await db.from("payments")
+        .update({ arrived_at: new Date(now).toISOString(), window_ends_at: new Date(now + WINDOW_HOURS * 3600e3).toISOString() })
+        .eq("id", body.payment_id).eq("company_id", user.id).eq("status", "held").is("arrived_at", null).select("id").maybeSingle();
+      return p ? out({ ok: true }) : out({ error: "Could not mark this job as arrived." }, 400);
+    }
+    if (act === "approve" && me.role === "customer") {
+      const { data: p } = await db.from("payments").select("id").eq("id", body.payment_id).eq("customer_id", user.id).maybeSingle();
+      if (!p) return out({ error: "Not found." }, 404);
+      return (await releasePayment(p.id, ["review"])) ? out({ ok: true }) : out({ error: "Nothing to approve." }, 400);
+    }
+    if (act === "dispute" && me.role === "customer") {
+      const { payment_id, kind, reason } = body;
+      if (!["refund", "dispute"].includes(kind) || String(reason || "").trim().length < 10) return out({ error: "Please explain what went wrong (at least 10 characters)." }, 400);
+      const { data: p } = await db.from("payments").update({ status: "disputed" })
+        .eq("id", payment_id).eq("customer_id", user.id).in("status", ["held", "review"]).select().maybeSingle();
+      if (!p) return out({ error: "This payment can no longer be disputed." }, 400);
+      await db.from("disputes").insert({ payment_id: p.id, request_id: p.request_id, customer_id: p.customer_id, company_id: p.company_id, kind, reason: String(reason).trim().slice(0, 1500) });
+      return out({ ok: true });
+    }
+    if (act === "sweep") return out({ released: await sweep() });
+    if (act === "admin_list" && isAdmin) {
+      const { data: ds } = await db.from("disputes").select("*").order("created_at", { ascending: false }).limit(100);
+      const rows = [];
+      for (const d of ds || []) {
+        const [{ data: p }, { data: r }, { data: c }] = await Promise.all([
+          db.from("payments").select("amount_cents").eq("id", d.payment_id).single(),
+          db.from("requests").select("service,address").eq("id", d.request_id).single(),
+          db.from("completions").select("notes,photos").eq("payment_id", d.payment_id).maybeSingle()]);
+        const urls = c?.photos?.length ? ((await db.storage.from("job-photos").createSignedUrls(c.photos, 3600)).data || []).map((x) => x.signedUrl).filter(Boolean) : [];
+        rows.push({ ...d, amount_cents: p?.amount_cents, service: r?.service, address: r?.address, notes: c?.notes, photo_urls: urls });
+      }
+      return out({ disputes: rows });
+    }
+    if (act === "resolve" && isAdmin) {
+      const { data: d } = await db.from("disputes").select("*").eq("id", body.dispute_id).eq("status", "open").maybeSingle();
+      if (!d) return out({ error: "Dispute not found or already resolved." }, 400);
+      const note = String(body.note || "").slice(0, 500), done = new Date().toISOString();
+      if (body.outcome === "refund") {
+        const { data: p } = await db.from("payments").update({ status: "releasing" }).eq("id", d.payment_id).eq("status", "disputed").select().maybeSingle();
+        if (!p) return out({ error: "This payment is not in dispute." }, 400);
+        try { await stripe.refunds.create({ charge: p.stripe_charge_id }, { idempotencyKey: `refund-${p.id}` }); }
+        catch (e) { await db.from("payments").update({ status: "disputed" }).eq("id", p.id); throw e; }
+        await db.from("payments").update({ status: "refunded" }).eq("id", p.id);
+        const { data: r } = await db.from("requests").select("plan").eq("id", p.request_id).single();
+        if (r?.plan === "once") await db.from("requests").update({ status: "cancelled" }).eq("id", p.request_id);
+        await db.from("disputes").update({ status: "refunded", resolution_note: note, resolved_at: done }).eq("id", d.id);
+      } else if (body.outcome === "release") {
+        if (!(await releasePayment(d.payment_id, ["disputed"]))) return out({ error: "This payment is not in dispute." }, 400);
+        await db.from("disputes").update({ status: "released", resolution_note: note, resolved_at: done }).eq("id", d.id);
+      } else return out({ error: "Choose refund or release." }, 400);
+      return out({ ok: true });
     }
     if (act === "cancel") {
       const { data: r } = await db.from("requests").select("*").eq("id", body.request_id).eq("customer_id", user.id).single();
@@ -89,6 +170,17 @@ Deno.serve(async (req) => {
   }
 });
 
+// Save a customer payment as "held" until the crew finishes the job.
+async function record(requestId: number, quoteId: number, chargeId: string, amount: number) {
+  const { data: q } = await db.from("quotes").select("company_id, requests(customer_id)").eq("id", quoteId).single();
+  if (!q) return;
+  const fee = Math.round(amount * FEE);
+  await db.from("payments").upsert({
+    request_id: requestId, quote_id: quoteId, customer_id: (q as any).requests.customer_id, company_id: q.company_id,
+    amount_cents: amount, fee_cents: fee, crew_cents: amount - fee, stripe_charge_id: chargeId,
+  }, { onConflict: "stripe_charge_id", ignoreDuplicates: true });
+}
+
 async function webhook(req: Request) {
   const ev = await stripe.webhooks
     .constructEventAsync(await req.text(), req.headers.get("stripe-signature")!, Deno.env.get("STRIPE_WEBHOOK_SECRET")!)
@@ -97,9 +189,45 @@ async function webhook(req: Request) {
   const o: any = ev.data.object;
   if (ev.type === "checkout.session.completed" && o.metadata?.request_id) {
     await db.from("requests").update({ status: "booked", booked_quote: +o.metadata.quote_id, stripe_subscription_id: o.subscription || null }).eq("id", +o.metadata.request_id);
+    if (o.mode === "payment" && o.payment_status === "paid") {
+      const pi = await stripe.paymentIntents.retrieve(o.payment_intent);
+      await record(+o.metadata.request_id, +o.metadata.quote_id, pi.latest_charge as string, o.amount_total);
+    }
+  }
+  if (ev.type === "invoice.paid" && o.subscription && o.charge) {
+    const sub = await stripe.subscriptions.retrieve(o.subscription);
+    if (sub.metadata?.request_id) await record(+sub.metadata.request_id, +sub.metadata.quote_id, o.charge, o.amount_paid);
   }
   if (ev.type === "customer.subscription.deleted") {
     await db.from("requests").update({ status: "cancelled" }).eq("stripe_subscription_id", o.id);
   }
   return new Response("ok");
+}
+
+// Pay the crew its share of a payment. "from" lists the statuses it may be released from.
+async function releasePayment(id: number, from: string[]): Promise<boolean> {
+  const { data: p } = await db.from("payments").update({ status: "releasing" }).eq("id", id).in("status", from).select().maybeSingle();
+  if (!p) return false;
+  const { data: co } = await db.from("profiles").select("stripe_account_id").eq("id", p.company_id).single();
+  try {
+    await stripe.transfers.create({
+      amount: p.crew_cents, currency: "usd", destination: co!.stripe_account_id,
+      source_transaction: p.stripe_charge_id, transfer_group: `req_${p.request_id}`, metadata: { payment_id: String(p.id) },
+    }, { idempotencyKey: `payout-${p.id}` });
+  } catch (e) {
+    await db.from("payments").update({ status: from[0] }).eq("id", p.id);
+    throw e;
+  }
+  await db.from("payments").update({ status: "released", released_at: new Date().toISOString() }).eq("id", p.id);
+  const { data: r } = await db.from("requests").select("plan").eq("id", p.request_id).single();
+  if (r?.plan === "once") await db.from("requests").update({ status: "done" }).eq("id", p.request_id);
+  return true;
+}
+
+// Release every payment whose approval window has ended.
+async function sweep(): Promise<number> {
+  const { data } = await db.from("payments").select("id").eq("status", "review").lte("review_ends_at", new Date().toISOString()).limit(50);
+  let n = 0;
+  for (const p of data || []) { try { if (await releasePayment(p.id, ["review"])) n++; } catch (_e) { /* try again next time */ } }
+  return n;
 }
