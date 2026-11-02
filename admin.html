@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Disputes | Lawn and Snow on the Go</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="wrap"><header><div class="brand">Disputes</div><div id="who"></div></header><main id="app"></main></div>
+<script type="module">
+import { $, esc, usd, api, boot } from "./common.js";
+// Sign in with a customer-type account whose email is listed in the ADMIN_EMAILS secret.
+boot("customer", () => {
+  const app = $("#app");
+  const load = async () => {
+    try {
+      const { disputes } = await api("admin_list");
+      app.innerHTML = disputes.length ? disputes.map((d) => `<article class="job"><h3>${d.kind === "refund" ? "Refund request" : "Dispute"} \u00b7 ${usd(d.amount_cents || 0)} \u00b7 ${esc(d.service)}</h3>
+        <p class="meta">${esc(d.address)} \u00b7 opened ${new Date(d.created_at).toLocaleString()}</p><p><strong>Customer says:</strong> ${esc(d.reason)}</p>
+        ${d.notes ? `<p><strong>Crew notes:</strong> ${esc(d.notes)}</p>` : `<p class="meta">The crew has not uploaded photos.</p>`}
+        <div class="row">${(d.photo_urls || []).map((u) => `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="Job photo" width="96" height="96" style="object-fit:cover;border-radius:8px"></a>`).join("")}</div>
+        ${d.status === "open" ? `<div class="row" style="margin-top:12px"><button class="btn sm" data-o="refund" data-id="${d.id}">Refund customer</button><button class="btn sm ghost" data-o="release" data-id="${d.id}">Pay the crew</button></div>` : `<p class="meta">Resolved: ${esc(d.status)} ${esc(d.resolution_note || "")}</p>`}</article>`).join("") : `<p class="empty">No disputes.</p>`;
+    } catch (e) { app.innerHTML = `<p class="panel">${esc(e.message)}</p>`; }
+  };
+  app.onclick = async (e) => {
+    const b = e.target.closest("[data-o]"); if (!b) return;
+    const note = prompt("Short note for the record (optional):"); if (note === null) return;
+    try { await api("resolve", { dispute_id: +b.dataset.id, outcome: b.dataset.o, note }); } catch (x) { alert(x.message); }
+    load();
+  };
+  load();
+});
+</script></body></html>
