@@ -36,6 +36,11 @@ After a job is booked, the crew sets an **estimated arrival time** on the active
 ## Photos
 Customers can add up to 6 photos to a request, and crews can add up to 6 to each quote. They are stored in the private `quote-photos` bucket (created by `repair.sql`), shrunk in the browser first, and shown only to the people involved. Finished-job photos use a separate `job-photos` bucket.
 
+## Fees
+- **15% commission** on the crew's price, taken from the crew's side. The crew receives 85%.
+- **$5 service fee** paid by the customer on top of the quote, for each completed job or visit. It is collected at checkout, held with the payment, and refunded if the payment is refunded. The amount is `SERVICE_FEE_CENTS` in the function and `SERVICE_FEE` in `web/common.js`.
+- Example: a $100 quote costs the customer $105. The crew receives $85. You keep $20 before Stripe's processing fees.
+
 ## How a job and payment work
 1. A customer accepts a quote and pays. The job becomes an **active job** for both sides, and other quotes disappear.
 2. The money is collected by your Stripe account and **held**. The crew is not paid yet.

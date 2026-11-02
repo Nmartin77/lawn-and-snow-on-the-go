@@ -49,7 +49,7 @@ boot("company", async (me) => {
     : p.status === "disputed" ? `<p class="meta">On hold: the customer reported a problem. We will review the photos and contact you.</p>`
     : p.status === "refunded" ? `<p class="meta">Refunded to the customer.</p>`
     : p.status === "releasing" ? `<p class="meta">Releasing your payout...</p>`
-    : schedule(p) + `<form class="panel" data-pid="${p.id}"><p class="meta">The customer paid ${usd(p.amount_cents)}. You receive ${usd(p.crew_cents)} after you finish the job, upload photos, and the customer approves or 48 hours pass.</p>
+    : schedule(p) + `<form class="panel" data-pid="${p.id}"><p class="meta">The customer paid ${usd(p.amount_cents - (p.service_fee_cents || 0))} for the job. You receive ${usd(p.crew_cents)} after you finish the job, upload photos, and the customer approves or 48 hours pass.</p>
         <label>Photos of the finished work (required)<input type="file" name="photos" accept="image/*" multiple required></label>
         <label>Notes (optional)<input name="notes" maxlength="500"></label><button class="btn sm" style="margin-top:12px">Finish job and get paid</button></form>`;
   const won = (r) => {

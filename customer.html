@@ -6,7 +6,7 @@
 <nav><button class="btn sm ghost" data-v="home">Requests</button><button class="btn sm ghost" data-v="account">Account</button></nav><div id="who"></div></header>
 <div id="map" class="map"></div><main id="app"></main><footer class="meta" style="margin-top:32px"><a href="terms.html">Terms of service</a> · <a href="privacy.html">Privacy policy</a></footer></div>
 <script type="module">
-import { sb, $, esc, usd, PLANS, SERVICES, api, boot, geocode, makeMap, uploadPhotos, photoUrls, thumbs, myLocation } from "./common.js";
+import { sb, $, esc, usd, PLANS, SERVICES, api, boot, geocode, makeMap, uploadPhotos, photoUrls, thumbs, myLocation, SERVICE_FEE } from "./common.js";
 boot("customer", async (me) => {
   let view = "home", reqs = [], quotes = [], crew = [], pays = [], comps = [], urls = {}, pu = {}, pins = [], mp = null, near = [], nearAddr = "", here = null;
   let note = location.search.includes("paid") ? "Payment received. Your booking appears here in a moment." : "";
@@ -15,7 +15,7 @@ boot("customer", async (me) => {
   const card = (r) => {
     const qs = quotes.filter((q) => q.request_id === r.id);
     const body = r.status === "open"
-      ? qs.map((q) => `<div class="quote"><div><strong>${esc(q.co?.company_name || "A crew")}</strong><p>${esc(q.message || "")}</p><p class="meta">Includes ${usd(q.price_cents * 0.15)} platform fee</p>${thumbs(q.photos, pu)}</div>
+      ? qs.map((q) => `<div class="quote"><div><strong>${esc(q.co?.company_name || "A crew")}</strong><p>${esc(q.message || "")}</p><p class="meta">Includes ${usd(q.price_cents * 0.15)} platform fee. Plus a ${usd(SERVICE_FEE)} service fee, so you pay <strong>${usd(q.price_cents + SERVICE_FEE)}</strong>${r.plan === "once" ? "" : " per visit"}.</p>${thumbs(q.photos, pu)}</div>
           <div><span class="price">${usd(q.price_cents)}${r.plan === "once" ? "" : "/visit"}</span> <button class="btn sm" data-act="accept" data-id="${q.id}">${r.plan === "once" ? "Book and pay" : "Subscribe"}</button></div></div>`).join("")
         + `<p><button class="btn sm ghost" data-act="del" data-id="${r.id}">Delete request</button></p>`
       : r.status === "booked" && r.plan !== "once" ? `<p><button class="btn sm ghost" data-act="cancel" data-id="${r.id}">Cancel subscription</button></p>` : "";
@@ -37,7 +37,7 @@ boot("customer", async (me) => {
     : p.status === "disputed" ? "Under review. The payment is on hold." : p.status === "refunded" ? "Refunded." : "Waiting for the crew to finish the job.";
   const visit = (p) => {
     const c = comps.find((x) => x.payment_id === p.id);
-    return `<div class="quote"><div><strong>${usd(p.amount_cents)}</strong> <span class="meta">paid ${new Date(p.created_at).toLocaleDateString()}</span>
+    return `<div class="quote"><div><strong>${usd(p.amount_cents)}</strong> <span class="meta">paid ${new Date(p.created_at).toLocaleDateString()}${p.service_fee_cents ? ", includes a " + usd(p.service_fee_cents) + " service fee" : ""}</span>
       <p class="meta">${state(p, c)}</p>${p.status === "held" ? sched(p) : ""}${p.status === "review" ? `<button class="btn sm" data-act="approve" data-id="${p.id}">Approve and release payment</button>` : ""}${c?.notes ? `<p>${esc(c.notes)}</p>` : ""}</div>
       ${c ? `<div class="row">${c.photos.map((x) => urls[x] ? `<a href="${urls[x]}" target="_blank" rel="noopener"><img src="${urls[x]}" alt="Photo of the finished work" width="72" height="72" style="object-fit:cover;border-radius:8px"></a>` : "").join("")}</div>` : ""}</div>`;
   };
@@ -59,7 +59,7 @@ boot("customer", async (me) => {
     <label>Preferred date<input id="d" type="date" required></label>
     <label>Notes<textarea id="n" rows="2"></textarea></label>
     <label>Photos of the area (optional, up to 6)<input id="ph" type="file" accept="image/*" multiple></label>
-    <p class="meta">Prices include a 15% platform fee.</p><button class="btn">Send to local pros</button></form>
+    <p class="meta">Prices include a 15% platform fee. A $5 service fee is added to each job.</p><button class="btn">Send to local pros</button></form>
     <section>${nearPanel()}${reqs.some((r) => r.status === "booked") ? `<h2>Active jobs</h2>${reqs.filter((r) => r.status === "booked").map(activeCard).join("")}` : ""}<h2>Your requests</h2>${reqs.some((r) => r.status === "open") ? reqs.filter((r) => r.status === "open").map(card).join("") : `<p class="empty">No open requests. Fill in the form and local crews will send prices.</p>`}${reqs.some((r) => ["done", "cancelled"].includes(r.status)) ? `<h2>Past jobs</h2>${reqs.filter((r) => ["done", "cancelled"].includes(r.status)).map(pastCard).join("")}` : ""}</section></div>`;
   const account = () => `<div class="grid"><form class="panel" id="pf"><h2>Contact and address</h2>
     ${[["name", "Name"], ["phone", "Phone"], ["street", "Service address"], ["city", "City"], ["state", "State"], ["zip", "ZIP"]].map(([k, l]) => `<label>${l}<input name="${k}" value="${esc(me[k] || "")}"></label>`).join("")}

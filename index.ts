@@ -6,6 +6,7 @@ const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, { apiVersion: "202
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const SITE = Deno.env.get("SITE_URL")!; // e.g. https://YOUR-USERNAME.github.io/lawn-and-snow-on-the-go (no trailing slash)
 const FEE = 0.15; // platform fee: 15% of the job total
+const SERVICE_FEE_CENTS = 500; // flat $5 the customer pays for each completed job or visit, on top of the quote
 const WINDOW_HOURS = 2; // the crew has this long to finish after arriving (or after the ETA)
 const REVIEW_HOURS = 48; // how long the customer has to approve or report a problem after the crew finishes
 const PLAN: Record<string, { interval: "week" | "month"; interval_count: number }> = {
@@ -69,7 +70,11 @@ Deno.serve(async (req) => {
           ...(plan !== "once" ? { recurring: PLAN[plan] } : {}),
         },
       };
-      const common = { customer: cust, line_items: [item], metadata: meta, success_url: SITE + "/customer.html?paid=1", cancel_url: SITE + "/customer.html" };
+      const feeItem = {
+        quantity: 1,
+        price_data: { currency: "usd", unit_amount: SERVICE_FEE_CENTS, product_data: { name: "Service fee" }, ...(plan !== "once" ? { recurring: PLAN[plan] } : {}) },
+      };
+      const common = { customer: cust, line_items: [item, feeItem], metadata: meta, success_url: SITE + "/customer.html?paid=1", cancel_url: SITE + "/customer.html" };
       // The customer pays us. The crew's share is transferred only after the job is finished (see "complete").
       const s = await stripe.checkout.sessions.create(plan === "once"
         ? { ...common, mode: "payment", payment_intent_data: { transfer_group: `req_${q.request_id}`, setup_future_usage: "off_session", metadata: meta } }
@@ -174,10 +179,11 @@ Deno.serve(async (req) => {
 async function record(requestId: number, quoteId: number, chargeId: string, amount: number) {
   const { data: q } = await db.from("quotes").select("company_id, requests(customer_id)").eq("id", quoteId).single();
   if (!q) return;
-  const fee = Math.round(amount * FEE);
+  // The 15% commission applies to the crew's price only. The $5 service fee stays with the platform.
+  const base = Math.max(0, amount - SERVICE_FEE_CENTS), fee = Math.round(base * FEE);
   await db.from("payments").upsert({
     request_id: requestId, quote_id: quoteId, customer_id: (q as any).requests.customer_id, company_id: q.company_id,
-    amount_cents: amount, fee_cents: fee, crew_cents: amount - fee, stripe_charge_id: chargeId,
+    amount_cents: amount, service_fee_cents: SERVICE_FEE_CENTS, fee_cents: fee, crew_cents: base - fee, stripe_charge_id: chargeId,
   }, { onConflict: "stripe_charge_id", ignoreDuplicates: true });
 }
 

@@ -126,7 +126,7 @@ create table if not exists payments(
   quote_id bigint not null,
   customer_id uuid not null references profiles,
   company_id uuid not null references profiles,
-  amount_cents int not null, fee_cents int not null, crew_cents int not null,
+  amount_cents int not null, service_fee_cents int not null default 0, fee_cents int not null, crew_cents int not null,
   stripe_charge_id text not null unique,
   status text not null default 'held' check(status in('held','review','disputed','releasing','released','refunded')),
   review_ends_at timestamptz,
@@ -212,6 +212,7 @@ end $$;
 grant update(photos) on public.requests to authenticated;
 
 alter table public.payments add column if not exists review_ends_at timestamptz;
+alter table public.payments add column if not exists service_fee_cents int not null default 0;
 alter table public.payments add column if not exists eta_at timestamptz;
 alter table public.payments add column if not exists arrived_at timestamptz;
 alter table public.payments add column if not exists window_ends_at timestamptz;
